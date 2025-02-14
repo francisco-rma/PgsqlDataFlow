@@ -36,20 +36,21 @@ namespace PgsqlDataFlow
         public BulkWriter(string connectionString)
         {
             DestinationTableName = GetModelTableName();
-
             DataSource = NpgsqlDataSource.Create(connectionString);
+
+            using var conn = DataSource.OpenConnection();
+
             ModelPKName = GetModelPrimaryKey();
+            DbPKName = GetDbPrimaryKey(conn, DestinationTableName);
 
             Dictionary<string, NpgsqlDbType> dbSchema = [];
 
-            using var conn = DataSource.CreateConnection();
             using (var cmd = new NpgsqlCommand("SELECT * FROM " + DestinationTableName + " LIMIT 1", conn))
             {
                 using var rdr = cmd.ExecuteReader();
                 var schema = rdr.GetSchemaTable() ?? throw new Exception($"Could not find table schema for table {DestinationTableName}");
                 var cols = rdr.GetColumnSchema();
 
-                DbPKName = schema.PrimaryKey[0].ColumnName;
 
                 if (string.IsNullOrEmpty(ModelPKName) || string.IsNullOrEmpty(DbPKName))
                     throw new Exception("No primary key found");
@@ -95,7 +96,7 @@ namespace PgsqlDataFlow
                         throw new Exception($"Property '{Properties[idx].Name}' does not match it's column data type counterpart.\n" +
                                             $"Found type {Properties[idx].PropertyType}, expected {TypeMapper.GetApplicationType(Types[idx]).Name}");
 
-                    if ((DbColumns[idx].IsAutoIncrement ?? false)) { }
+                    if ((DbColumns[idx].IsAutoIncrement ?? DbColumns[idx].ColumnName == DbPKName)) { }
                     else if (BuilderCreate == null) { BuilderCreate = new(colName); }
                     else { BuilderCreate.Append(", " + colName); }
 
@@ -129,6 +130,36 @@ namespace PgsqlDataFlow
 
             throw new Exception("Could not find table primary key, be sure to annotate it on the model file");
         }
+
+        /// <summary>
+        /// Retrieves the primary key column name from the database.
+        /// </summary>
+        /// <param name="connection"></param>
+        /// <param name="tableName"></param>
+        /// <returns></returns>
+        /// <exception cref="Exception"></exception>
+        public static string GetDbPrimaryKey(NpgsqlConnection connection, string tableName)
+        {
+            string dbPk = "";
+            using (var cmd = new NpgsqlCommand(
+                    "SELECT a.attname " +
+                    "FROM   pg_index i " +
+                    "JOIN   pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) " +
+                    "WHERE  i.indrelid = '" + tableName + "'::regclass AND    i.indisprimary; ",
+                    connection))
+            {
+                using var rdr = cmd.ExecuteReader();
+                while (rdr.Read())
+                {
+                    object[] values = new object[rdr.FieldCount];
+                    rdr.GetValues(values);
+                    dbPk = values[0]?.ToString() ?? throw new Exception("Could not find table primary key, be sure to define one in the database");
+                }
+            }
+
+            return dbPk;
+        }
+
         private static Dictionary<string, string> DbToModel(Span<PropertyInfo> properties)
         {
             Dictionary<string, string> dict = [];
@@ -296,6 +327,143 @@ namespace PgsqlDataFlow
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Updates a specific column in the database for a batch of rows using the binary COPY protocol.
+        /// Ensures that the data types of model properties exactly match their corresponding database columns.
+        /// </summary>
+        /// <param name="sourceList">The list of models to be updated in the database.</param>
+        /// <param name="colIndex">The index of the column to be updated.</param>
+        /// <exception cref="InvalidCastException">
+        /// Thrown if a property type does not match the corresponding database column type (e.g., using a <c>long</c> (int64) for an <c>int4</c> column).
+        /// </exception>
+        /// <exception cref="InvalidOperationException">
+        /// Thrown if the database connection is lost during the operation.
+        /// </exception>
+        public void UpdateColumnBulk(IEnumerable<T> sourceList, int colIndex)
+        {
+            using var conn = DataSource.OpenConnection();
+
+            string tempName = "update_temp_table";
+
+            string colName = DbColumns[colIndex].ColumnName;
+            string colTypeName = Types[colIndex].ToString().ToLower();
+
+            using (var createTempTable = conn.CreateCommand())
+            {
+                createTempTable.CommandText = "CREATE TEMP TABLE " + tempName + " ("
+                    + (DbPKName + "_temp " + PKType.ToString().ToLower())
+                    + ", "
+                    + (colName) + "_temp " + Types[colIndex].ToString().ToLower() + ")";
+                createTempTable.ExecuteNonQuery();
+            };
+
+            using (var writer = conn.BeginBinaryImport("COPY " + tempName + " ("
+                + DbPKName + "_temp "
+                + ", "
+                + (colName) + "_temp " + ") "
+                + "FROM STDIN (FORMAT BINARY)"))
+            {
+                foreach (var item in sourceList)
+                {
+                    writer.StartRow();
+
+                    object? colValue = Properties[colIndex].GetValue(item);
+                    object? pkValue = Properties[PKIdx].GetValue(item);
+
+                    if (pkValue == null) { writer.WriteNull(); }
+                    else
+                    {
+                        switch (Types[PKIdx])
+                        {
+                            case NpgsqlDbType.Bigint:
+                                writer.Write((long)pkValue, Types[PKIdx]);
+                                break;
+
+                            case NpgsqlDbType.Boolean:
+                                writer.Write((bool)pkValue, Types[PKIdx]);
+                                break;
+
+                            case NpgsqlDbType.Integer:
+                                writer.Write((int)pkValue, Types[PKIdx]);
+                                break;
+
+                            case NpgsqlDbType.Smallint:
+                                writer.Write((short)pkValue, Types[PKIdx]);
+                                break;
+
+                            case NpgsqlDbType.Numeric:
+                                writer.Write((decimal)pkValue, Types[PKIdx]);
+                                break;
+
+                            case NpgsqlDbType.Timestamp:
+                            case NpgsqlDbType.Date:
+                                writer.Write(((DateTime)pkValue).SetKind(DateTimeKind.Unspecified), Types[PKIdx]);
+                                break;
+
+                            case NpgsqlDbType.TimestampTz:
+                                writer.Write(((DateTime)pkValue).SetKind(DateTimeKind.Utc), Types[PKIdx]);
+                                break;
+
+                            case NpgsqlDbType.Varchar:
+                                writer.Write((string)pkValue, Types[PKIdx]);
+                                break;
+                        }
+                    }
+
+                    if (colValue == null) { writer.WriteNull(); }
+                    else
+                    {
+                        switch (Types[colIndex])
+                        {
+                            case NpgsqlDbType.Bigint:
+                                writer.Write((long)colValue, Types[colIndex]);
+                                break;
+
+                            case NpgsqlDbType.Boolean:
+                                writer.Write((bool)colValue, Types[colIndex]);
+                                break;
+
+                            case NpgsqlDbType.Integer:
+                                writer.Write((int)colValue, Types[colIndex]);
+                                break;
+
+                            case NpgsqlDbType.Smallint:
+                                writer.Write((short)colValue, Types[colIndex]);
+                                break;
+
+                            case NpgsqlDbType.Numeric:
+                                writer.Write((decimal)colValue, Types[colIndex]);
+                                break;
+
+                            case NpgsqlDbType.Timestamp:
+                            case NpgsqlDbType.Date:
+                                writer.Write(((DateTime)colValue).SetKind(DateTimeKind.Unspecified), Types[colIndex]);
+                                break;
+
+                            case NpgsqlDbType.TimestampTz:
+                                writer.Write(((DateTime)colValue).SetKind(DateTimeKind.Utc), Types[colIndex]);
+                                break;
+
+                            case NpgsqlDbType.Varchar:
+                                writer.Write((string)colValue, Types[colIndex]);
+                                break;
+                        }
+                    }
+                }
+
+                writer.Complete();
+            }
+
+            using var update = conn.CreateCommand();
+            update.CommandText = "UPDATE " + DestinationTableName
+                + " SET " + DbColumns[colIndex] + " = " + tempName + "." + DbColumns[colIndex] + "_temp"
+                + " FROM " + tempName + " WHERE " + DestinationTableName + "." + DbPKName + " = " + tempName + "." + DbPKName + "_temp";
+
+            Console.WriteLine(update.CommandText);
+
+            update.ExecuteNonQuery();
         }
 
         /// <summary>
