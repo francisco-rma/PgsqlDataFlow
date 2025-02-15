@@ -120,6 +120,17 @@ namespace PgsqlDataFlow
             throw new Exception("Could not find table name, be sure to annotate it on the model file");
         }
 
+        /// <summary>
+        /// Gets the index of the specified property name in the model columns.
+        /// </summary>
+        /// <param name="propertyName">The name of the property to find the index for.</param>
+        /// <returns>The index of the specified property name in the model columns.</returns>
+        public int GetColumnIndex(string propertyName)
+        {
+            int idx = Array.IndexOf(ModelColumns, propertyName);
+            return idx;
+        }
+
         public string GetModelPrimaryKey()
         {
             foreach (var prop in Properties)
@@ -466,15 +477,21 @@ namespace PgsqlDataFlow
             update.ExecuteNonQuery();
         }
 
-        /// <summary>
-        /// Gets the index of the specified property name in the model columns.
-        /// </summary>
-        /// <param name="propertyName">The name of the property to find the index for.</param>
-        /// <returns>The index of the specified property name in the model columns.</returns>
-        public int GetColumnIndex(string propertyName)
+        public void SimulateBulk(List<T> source)
         {
-            int idx = Array.IndexOf(ModelColumns, propertyName);
-            return idx;
+            using var conn = DataSource.OpenConnection();
+            NpgsqlBinaryImporter writer = conn.BeginBinaryImport("COPY " + DestinationTableName + " (" + BuilderCreate.ToString() + ") FROM STDIN (FORMAT BINARY)");
+            ConstructTable(writer, source);
+            writer.Dispose();
+            return;
+        }
+        public void SimulateBulk(Span<T> source)
+        {
+            using var conn = DataSource.OpenConnection();
+            NpgsqlBinaryImporter writer = conn.BeginBinaryImport("COPY " + DestinationTableName + " (" + BuilderCreate.ToString() + ") FROM STDIN (FORMAT BINARY)");
+            ConstructTable(writer, source);
+            writer.Dispose();
+            return;
         }
     }
 }
