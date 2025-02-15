@@ -47,7 +47,7 @@ namespace PgsqlDataFlow
 
             using (var cmd = new NpgsqlCommand("SELECT * FROM " + DestinationTableName + " LIMIT 1", conn))
             {
-                using var rdr = cmd.ExecuteReader();
+                using var rdr = cmd.ExecuteReader(System.Data.CommandBehavior.KeyInfo);
                 var schema = rdr.GetSchemaTable() ?? throw new Exception($"Could not find table schema for table {DestinationTableName}");
                 var cols = rdr.GetColumnSchema();
 
@@ -185,7 +185,7 @@ namespace PgsqlDataFlow
         /// <exception cref="InvalidOperationException">
         /// Thrown if the database connection is lost during the operation.
         /// </exception>
-        public void CreateAutoIncrementBulk(Span<T> sourceList)
+        public void CreateBulk(Span<T> sourceList)
         {
             using var conn = DataSource.OpenConnection();
 
@@ -206,7 +206,7 @@ namespace PgsqlDataFlow
         /// Thrown if the database connection is lost during the operation.
         /// </exception>
 
-        public void CreateAutoIncrementBulk(List<T> sourceList)
+        public void CreateBulk(List<T> sourceList)
         {
             using var conn = DataSource.OpenConnection();
 
@@ -224,7 +224,7 @@ namespace PgsqlDataFlow
 
                 for (int j = 0; j < DbColumns.Count; j++)
                 {
-                    if (ModelColumns[j] == ModelPKName) { continue; }
+                    if (DbColumns[j].IsAutoIncrement ?? false) { continue; }
 
                     object? value = Properties[j].GetValue(item);
 
@@ -281,7 +281,7 @@ namespace PgsqlDataFlow
 
                 for (int j = 0; j < DbColumns.Count; j++)
                 {
-                    if (ModelColumns[j] == ModelPKName) { continue; }
+                    if (DbColumns[j].IsAutoIncrement ?? false) { continue; }
 
                     object? value = Properties[j].GetValue(item);
 
