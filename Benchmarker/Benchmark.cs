@@ -18,6 +18,7 @@ namespace Benchmarker
         public static void Main()
         {
             _ = BenchmarkRunner.Run<Benchmark>();
+            //var writer = new BulkWriter<FtQueue>(Constants.CONNECTIONSTRING);
         }
     }
 
@@ -26,33 +27,41 @@ namespace Benchmarker
     [MemoryDiagnoser]
     public class Benchmark
     {
-        [Params(10, 100, 1000, 10000)]
+        [Params(10, 100, 1000)]
         public int size { get; set; }
-        public BulkWriter<FtQueue> writer { get; set; } = new("Host=localhost;Port=5432;Pooling=true;Database=db_dw_cloud_local;User Id=postgres;Password=password;");
+        public BulkWriter<FtQueue> writer { get; set; } = new(Constants.CONNECTIONSTRING);
+        public BulkWriter<FtQueue> writerCustom { get; set; } = new(Constants.CUSTOMCONNECTIONSTRING);
         public FtQueue[] SampleSpan { get; set; } = [.. ReadCsv<FtQueue>("C:\\Users\\User\\projetos\\PgsqlDataFlow\\Benchmarker\\ft_queue_sample.csv")];
-        public FtQueue[] SampleList { get; set; } = [.. ReadCsv<FtQueue>("C:\\Users\\User\\projetos\\PgsqlDataFlow\\Benchmarker\\ft_queue_sample.csv")];
-        private static List<T> ReadCsv<T>(string path)
+        public List<FtQueue> SampleList { get; set; } = [.. ReadCsv<FtQueue>("C:\\Users\\User\\projetos\\PgsqlDataFlow\\Benchmarker\\ft_queue_sample.csv")];
+        private static T[] ReadCsv<T>(string path)
         {
             using var reader = new StreamReader(path);
             var records = new CsvReader(reader, CultureInfo.InvariantCulture).GetRecords<T>();
-            return records.ToList();
+            return records.ToArray();
         }
 
-        //[GlobalSetup]
-        //public void Setup()
-        //{
-        //    writer = 
-        //}
-
-        [Benchmark]
-        public void ListConstruction()
+        [GlobalSetup]
+        public void Setup()
         {
-            writer.SimulateBulk(SampleList[0..size]);
+            SampleSpan = ReadCsv<FtQueue>("C:\\Users\\User\\projetos\\PgsqlDataFlow\\Benchmarker\\ft_queue_sample.csv")[0..size];
+            SampleList = ReadCsv<FtQueue>("C:\\Users\\User\\projetos\\PgsqlDataFlow\\Benchmarker\\ft_queue_sample.csv").ToList()[0..size];
         }
+
+        //[Benchmark]
+        //public void ListConstruction()
+        //{
+        //    writer.SimulateBulk(SampleList);
+        //}
         [Benchmark]
         public void SpanConstruction()
         {
             writer.SimulateBulk(SampleSpan.AsSpan(0, size));
+        }
+
+        [Benchmark]
+        public void SpanConstructionCustom()
+        {
+            writerCustom.SimulateBulk(SampleSpan.AsSpan(0, size));
         }
 
         private IEnumerable<FtQueue> HandRolledReadCsv(string path)

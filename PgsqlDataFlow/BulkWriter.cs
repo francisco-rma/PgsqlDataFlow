@@ -33,8 +33,10 @@ namespace PgsqlDataFlow
         public string DbPKName { get; set; }
         public string[] ModelColumns { get; set; }
         public string ModelPKName { get; set; }
-        public BulkWriter(string connectionString)
+        public int bufferSize { get; set; }
+        public BulkWriter(string connectionString, int bufferSize = 8000)
         {
+            this.bufferSize = bufferSize;
             DestinationTableName = GetModelTableName();
             DataSource = NpgsqlDataSource.Create(connectionString);
 
@@ -198,93 +200,20 @@ namespace PgsqlDataFlow
         /// </exception>
         public void CreateBulk(Span<T> sourceList)
         {
-            using var conn = DataSource.OpenConnection();
+            if (sourceList.Length == 0 || sourceList.Length > Constants.CHUNKSIZE)
+            {
+                throw new Exception($"Input list is malformed with {sourceList.Length} entries (expected 0 < x <= {Constants.CHUNKSIZE}).");
+            }
 
+            using var conn = DataSource.OpenConnection();
             using NpgsqlBinaryImporter writer = conn.BeginBinaryImport("COPY " + DestinationTableName + " (" + BuilderCreate.ToString() + ") FROM STDIN (FORMAT BINARY)");
             ConstructTable(writer, sourceList);
             writer.Complete();
         }
 
-        /// <summary>
-        /// Creates and sends a batch of rows to the database using the binary COPY protocol.
-        /// Ensures that the data types of model properties exactly match their corresponding database columns.
-        /// </summary>
-        /// <param name="sourceList">The list of models to be inserted into the database.</param>
-        /// <exception cref="InvalidCastException">
-        /// Thrown if a property type does not match the corresponding database column type (e.g., using a <c>long</c> (int64) for an <c>int4</c> column).
-        /// </exception>
-        /// <exception cref="InvalidOperationException">
-        /// Thrown if the database connection is lost during the operation.
-        /// </exception>
-
-        public void CreateBulk(List<T> sourceList)
-        {
-            using var conn = DataSource.OpenConnection();
-
-            using NpgsqlBinaryImporter writer = conn.BeginBinaryImport("COPY " + DestinationTableName + " (" + BuilderCreate.ToString() + ") FROM STDIN (FORMAT BINARY)");
-            ConstructTable(writer, sourceList);
-            writer.Complete();
-        }
         private void ConstructTable(NpgsqlBinaryImporter writer, Span<T> sourceList)
         {
             for (int i = 0; i < sourceList.Length; i++)
-            {
-                var item = sourceList[i];
-
-                writer.StartRow();
-
-                for (int j = 0; j < DbColumns.Count; j++)
-                {
-                    if (DbColumns[j].IsAutoIncrement ?? false) { continue; }
-
-                    object? value = Properties[j].GetValue(item);
-
-                    if (value == null) { writer.WriteNull(); }
-
-                    else
-                    {
-                        switch (Types[j])
-                        {
-                            case NpgsqlDbType.Bigint:
-                                writer.Write((long)value, Types[j]);
-                                break;
-
-                            case NpgsqlDbType.Boolean:
-                                writer.Write((bool)value, Types[j]);
-                                break;
-
-                            case NpgsqlDbType.Integer:
-                                writer.Write((int)value, Types[j]);
-                                break;
-
-                            case NpgsqlDbType.Smallint:
-                                writer.Write((short)value, Types[j]);
-                                break;
-
-                            case NpgsqlDbType.Numeric:
-                                writer.Write((decimal)value, Types[j]);
-                                break;
-
-                            case NpgsqlDbType.Timestamp:
-                            case NpgsqlDbType.Date:
-                                writer.Write(((DateTime)value).SetKind(DateTimeKind.Unspecified), Types[j]);
-                                break;
-
-                            case NpgsqlDbType.TimestampTz:
-                                writer.Write(((DateTime)value).SetKind(DateTimeKind.Utc), Types[j]);
-                                break;
-
-                            case NpgsqlDbType.Varchar:
-                                writer.Write((string)value, Types[j]);
-                                break;
-                        }
-                    }
-                }
-            }
-        }
-        private void ConstructTable(NpgsqlBinaryImporter writer, List<T> sourceList)
-        {
-            for (int i = 0; i < sourceList.Count; i++)
             {
                 var item = sourceList[i];
 
@@ -475,15 +404,6 @@ namespace PgsqlDataFlow
             Console.WriteLine(update.CommandText);
 
             update.ExecuteNonQuery();
-        }
-
-        public void SimulateBulk(List<T> source)
-        {
-            using var conn = DataSource.OpenConnection();
-            NpgsqlBinaryImporter writer = conn.BeginBinaryImport("COPY " + DestinationTableName + " (" + BuilderCreate.ToString() + ") FROM STDIN (FORMAT BINARY)");
-            ConstructTable(writer, source);
-            writer.Dispose();
-            return;
         }
         public void SimulateBulk(Span<T> source)
         {
