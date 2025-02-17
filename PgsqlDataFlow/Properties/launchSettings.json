@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "PgsqlDataFlow": {
+      "commandName": "Project",
+      "hotReloadEnabled": false
+    }
+  }
+}

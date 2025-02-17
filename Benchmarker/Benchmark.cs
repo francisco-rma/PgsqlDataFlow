@@ -1,9 +1,13 @@
 ﻿using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Reports;
 using BenchmarkDotNet.Running;
+using CommandLine;
 using CsvHelper;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using NpgsqlTypes;
 using PgsqlDataFlow;
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Data.Common;
@@ -17,8 +21,20 @@ namespace Benchmarker
     {
         public static void Main()
         {
-            _ = BenchmarkRunner.Run<Benchmark>();
-            //var writer = new BulkWriter<FtQueue>(Constants.CONNECTIONSTRING);
+            var result = BenchmarkRunner.Run<Benchmark>();
+            Console.WriteLine(result.AllRuntimes);
+            int i = 0;
+            foreach (var report in result.Reports)
+            {
+                Console.WriteLine($"\n-------------Report {i}-------------");
+                Console.WriteLine(report.ToString());
+                Console.WriteLine($"------------------------------------\n");
+                i += 1;
+            }
+
+            //Benchmark benchmark = new();
+            //benchmark.SoAConstruction();
+            //benchmark.ModelAllocation();
         }
     }
 
@@ -27,7 +43,7 @@ namespace Benchmarker
     [MemoryDiagnoser]
     public class Benchmark
     {
-        [Params(10, 100, 1000)]
+        //[Params(10, 100, 1000)]
         public int size { get; set; }
         public BulkWriter<FtQueue> writer { get; set; } = new(Constants.CONNECTIONSTRING);
         public BulkWriter<FtQueue> writerCustom { get; set; } = new(Constants.CUSTOMCONNECTIONSTRING);
@@ -40,7 +56,7 @@ namespace Benchmarker
             return records.ToArray();
         }
 
-        [GlobalSetup]
+        //[GlobalSetup]
         public void Setup()
         {
             SampleSpan = ReadCsv<FtQueue>("C:\\Users\\User\\projetos\\PgsqlDataFlow\\Benchmarker\\ft_queue_sample.csv")[0..size];
@@ -48,64 +64,73 @@ namespace Benchmarker
         }
 
         //[Benchmark]
-        //public void ListConstruction()
-        //{
-        //    writer.SimulateBulk(SampleList);
-        //}
-        [Benchmark]
         public void SpanConstruction()
         {
             writer.SimulateBulk(SampleSpan.AsSpan(0, size));
         }
 
-        [Benchmark]
+        //[Benchmark]
         public void SpanConstructionCustom()
         {
             writerCustom.SimulateBulk(SampleSpan.AsSpan(0, size));
         }
 
-        private IEnumerable<FtQueue> HandRolledReadCsv(string path)
+        [Benchmark]
+        public void SoAConstruction()
         {
-            List<FtQueue> result = [];
+            Span<PropertyInfo> properties = typeof(FtQueue).GetProperties();
+            Span<Type> types = new Type[properties.Length];
+            Span<Array> storage = new Array[properties.Length];
+            int idx = 0;
+            foreach (PropertyInfo property in properties)
+            {
+                //storage[idx] = Array.CreateInstance(property.PropertyType, Constants.CHUNKSIZE);
+                storage[idx] = ArrayPool<int>.Shared.Rent(Constants.CHUNKSIZE);
+                types[idx] = property.PropertyType;
+                idx += 1;
+            }
+            HandRolledReadCsv(Constants.PATH, storage, types);
+        }
+
+        [Benchmark]
+        public void ModelAllocation()
+        {
+            PropertyInfo[] properties = typeof(FtQueue).GetProperties();
+            Array[] storage = new Array[properties.Length];
+            Type[] types = new Type[properties.Length];
+            int idx = 0;
+            foreach (PropertyInfo property in properties)
+            {
+                storage[idx] = Array.CreateInstance(property.PropertyType, Constants.CHUNKSIZE);
+                types[idx] = property.PropertyType;
+                idx += 1;
+            }
+            List<FtQueue> test = [.. ReadCsv<FtQueue>(Constants.PATH)];
+        }
+
+        private void HandRolledReadCsv(string path, Span<Array> destination, Span<Type> types)
+        {
             using (var reader = new StreamReader(path))
             {
                 string[] columns = (reader.ReadLine() ?? "").Replace("\"", "").Split(',');
 
-                PropertyInfo[] properties = typeof(FtQueue).GetProperties();
-                for (int idx = 0; idx < columns.Length; idx++)
+                int i = 0;
+                for (var data = reader.ReadLine(); data != null;)
                 {
-                    string col = columns[idx];
-                    int j = 0;
-                    while (j <= properties.Length - 1)
+                    string[] values = data.Replace("\"", "").Split(',');
+                    for (int j = 0; j < columns.Length; j++)
                     {
-                        var colAnnotation = properties[j].GetCustomAttribute<ColumnAttribute>();
-                        if (colAnnotation == null) { continue; }
-
-                        if (colAnnotation.Name == col)
+                        var type = destination[j].GetValue(0)?.GetType();
+                        if (type is not null)
                         {
-                            (properties[idx], properties[j]) = (properties[j], properties[idx]);
-                            break;
-                        }
-                        else
-                        {
-                            j += 1;
+                            destination[j].SetValue(Convert.ChangeType(values[j], type), i);
                         }
                     }
-                }
-
-                if (columns.Length != properties.Length)
-                {
-                    throw new Exception("Columns count does not match properties count");
-                }
-
-                for (string? line = reader.ReadLine(); line != null; line = reader.ReadLine())
-                {
-                    string[] values = line.Split(',');
-
-                    Activator.CreateInstance(typeof(FtQueue), values);
+                    i += 1;
+                    data = reader.ReadLine();
                 }
             }
-            return result;
+            return;
         }
     }
 }
