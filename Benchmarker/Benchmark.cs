@@ -1,67 +1,66 @@
 ﻿using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Running;
 using CsvHelper;
-using NpgsqlTypes;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using PgsqlDataFlow;
-using System;
-using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations.Schema;
-using System.Data.Common;
 using System.Globalization;
 using System.Reflection;
 
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 namespace Benchmarker
 {
-    public class Program
+    public class Run
     {
         public static void Main()
         {
             _ = BenchmarkRunner.Run<Benchmark>();
-            //var writer = new BulkWriter<FtQueue>(Constants.CONNECTIONSTRING);
         }
     }
-
-
 
     [MemoryDiagnoser]
     public class Benchmark
     {
-        [Params(10, 100, 1000)]
-        public int size { get; set; }
+        public PooledDbContextFactory<TestDbContext> contextFactory = new(new DbContextOptionsBuilder<TestDbContext>().UseNpgsql(
+            Constants.CONNECTIONSTRING,
+            opts => { opts.EnableRetryOnFailure(maxRetryCount: 5, maxRetryDelay: TimeSpan.FromSeconds(20), null); }).Options);
+
+        [Params(1000, 10000, 100000)]
+        public int BatchSize { get; set; }
+
         public BulkWriter<FtQueue> writer { get; set; } = new(Constants.CONNECTIONSTRING);
-        public BulkWriter<FtQueue> writerCustom { get; set; } = new(Constants.CUSTOMCONNECTIONSTRING);
-        public FtQueue[] SampleSpan { get; set; } = [.. ReadCsv<FtQueue>("C:\\Users\\User\\projetos\\PgsqlDataFlow\\Benchmarker\\ft_queue_sample.csv")];
-        public List<FtQueue> SampleList { get; set; } = [.. ReadCsv<FtQueue>("C:\\Users\\User\\projetos\\PgsqlDataFlow\\Benchmarker\\ft_queue_sample.csv")];
-        private static T[] ReadCsv<T>(string path)
-        {
-            using var reader = new StreamReader(path);
-            var records = new CsvReader(reader, CultureInfo.InvariantCulture).GetRecords<T>();
-            return records.ToArray();
-        }
+
+        public FtQueue[] entries { get; set; } = [];
 
         [GlobalSetup]
-        public void Setup()
+        [IterationSetup]
+        public void InitializeEntries()
         {
-            SampleSpan = ReadCsv<FtQueue>("C:\\Users\\User\\projetos\\PgsqlDataFlow\\Benchmarker\\ft_queue_sample.csv")[0..size];
-            SampleList = ReadCsv<FtQueue>("C:\\Users\\User\\projetos\\PgsqlDataFlow\\Benchmarker\\ft_queue_sample.csv").ToList()[0..size];
+            entries = new FtQueue[BatchSize];
+            for (int i = 0; i < entries.Length; i++)
+            {
+                entries[i] = new FtQueue();
+            }
         }
 
-        //[Benchmark]
-        //public void ListConstruction()
-        //{
-        //    writer.SimulateBulk(SampleList);
-        //}
-        [Benchmark]
-        public void SpanConstruction()
+        [IterationCleanup]
+        public void TruncateTable()
         {
-            writer.SimulateBulk(SampleSpan.AsSpan(0, size));
+            using var conn = writer.DataSource.OpenConnection();
+            using var truncateCommand = conn.CreateCommand();
+            truncateCommand.CommandText = "TRUNCATE TABLE public.ft_queue RESTART IDENTITY RESTRICT;\r\n";
+            truncateCommand.ExecuteNonQuery();
         }
 
         [Benchmark]
-        public void SpanConstructionCustom()
+        public void BulkWrite() => writer.CreateBulk(entries);
+
+        [Benchmark]
+        public void EntityWrite()
         {
-            writerCustom.SimulateBulk(SampleSpan.AsSpan(0, size));
+            using var context = contextFactory.CreateDbContext();
+            context.AddRange(entries);
+            context.SaveChanges();
         }
 
         private IEnumerable<FtQueue> HandRolledReadCsv(string path)
@@ -107,6 +106,12 @@ namespace Benchmarker
             }
             return result;
         }
+
+        private static T[] ReadCsv<T>(string path)
+        {
+            using var reader = new StreamReader(path);
+            var records = new CsvReader(reader, CultureInfo.InvariantCulture).GetRecords<T>();
+            return records.ToArray();
+        }
     }
 }
-#pragma warning restore CS1591 // Missing XML comment for publicly visible type or member
