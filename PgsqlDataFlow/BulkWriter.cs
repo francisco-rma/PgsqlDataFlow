@@ -5,6 +5,7 @@ using PgsqlDataFlow.Extensions;
 using System.Collections.ObjectModel;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using System.Linq.Expressions;
 using System.Reflection;
 using System.Text;
 
@@ -19,24 +20,15 @@ namespace PgsqlDataFlow
         /// Gets or sets the StringBuilder for creating SQL commands.
         /// </summary>
         public StringBuilder BuilderCreate { get; set; }
-
-        /// <summary>
-        /// Array of properties of the generic type T.
-        /// Uses the same indexing as [DbColumns, ModelColumns,Types]
-        /// </summary>
-        public readonly PropertyInfo[] Properties = typeof(T).GetProperties();
         public int PKIdx { get; set; }
         public NpgsqlDbType PKType { get; set; }
         public NpgsqlDbType[] Types { get; set; }
         public ReadOnlyCollection<NpgsqlDbColumn> DbColumns { get; set; }
-        //public NpgsqlDbColumn[] DbColumns { get; set; }
         public string DbPKName { get; set; }
         public string[] ModelColumns { get; set; }
         public string ModelPKName { get; set; }
-        public int bufferSize { get; set; }
-        public BulkWriter(string connectionString, int bufferSize = 8000)
+        public BulkWriter(string connectionString)
         {
-            this.bufferSize = bufferSize;
             DestinationTableName = GetModelTableName();
             DataSource = NpgsqlDataSource.Create(connectionString);
 
@@ -72,35 +64,46 @@ namespace PgsqlDataFlow
                     }
                 }
 
-                var nameMap = DbToModel(Properties);
+                Dictionary<string, string> nameMap = [];
+                foreach (PropertyInfo prop in typeof(T).GetProperties())
+                {
+                    var col = prop.GetCustomAttribute<ColumnAttribute>();
+                    if (col is not null && !string.IsNullOrEmpty(col.Name))
+                    {
+                        nameMap[col.Name] = prop.Name;
+                    }
+                }
 
                 if (nameMap.Count < 1) throw new Exception("Table must have at least 1 column");
                 if (nameMap.Count != dbSchema.Count) throw new Exception("Model and database schema do not match");
 
                 Types = new NpgsqlDbType[dbSchema.Count];
                 ModelColumns = new string[dbSchema.Count];
+                var tempProperties = new PropertyInfo[dbSchema.Count];
 
                 int idx = 0;
                 foreach ((string colName, NpgsqlDbType colType) in dbSchema)
                 {
                     ModelColumns[idx] = nameMap[colName];
                     Types[idx] = colType;
-                    Properties[idx] = typeof(T).GetProperty(ModelColumns[idx]) ?? throw new Exception($"Property '{ModelColumns[idx]}' not found");
 
-                    Type propertyType = Properties[idx].PropertyType;
+                    PropertyInfo property = typeof(T).GetProperty(ModelColumns[idx]) ?? throw new Exception($"Property '{ModelColumns[idx]}' not found");
+                    tempProperties[idx] = property;
+
+                    Type propertyType = property.PropertyType;
 
                     if (propertyType.IsGenericType && propertyType.GetGenericTypeDefinition() == typeof(Nullable<>))
                         propertyType = propertyType.GetGenericArguments()[0];
 
-                    HashSet<NpgsqlDbType> expectedTypes = TypeMapper.GetPgsqlTypes(propertyType);
+                    if (!TypeMapper.GetPgsqlTypes(propertyType).Contains(colType))
+                        throw new Exception($"Property '{property.Name}' does not match it's column data type counterpart.\n" +
+                                            $"Found type {property.PropertyType}, expected {TypeMapper.GetApplicationType(Types[idx]).Name}");
 
-                    if (!expectedTypes.Contains(colType))
-                        throw new Exception($"Property '{Properties[idx].Name}' does not match it's column data type counterpart.\n" +
-                                            $"Found type {Properties[idx].PropertyType}, expected {TypeMapper.GetApplicationType(Types[idx]).Name}");
-
-                    if ((DbColumns[idx].IsAutoIncrement ?? DbColumns[idx].ColumnName == DbPKName)) { }
-                    else if (BuilderCreate == null) { BuilderCreate = new(colName); }
-                    else { BuilderCreate.Append(", " + colName); }
+                    if (!(DbColumns[idx].IsAutoIncrement ?? DbColumns[idx].ColumnName == DbPKName))
+                    {
+                        if (BuilderCreate == null) { BuilderCreate = new(colName); }
+                        else { BuilderCreate.Append(", " + colName); }
+                    }
 
                     idx += 1;
                 }
@@ -130,12 +133,14 @@ namespace PgsqlDataFlow
         public int GetColumnIndex(string propertyName)
         {
             int idx = Array.IndexOf(ModelColumns, propertyName);
+            if (idx == -1)
+                throw new Exception("Column not found");
             return idx;
         }
 
         public string GetModelPrimaryKey()
         {
-            foreach (var prop in Properties)
+            foreach (var prop in typeof(T).GetProperties())
             {
                 if (prop.GetCustomAttribute<KeyAttribute>() is KeyAttribute _)
                     return prop.Name;
@@ -173,20 +178,6 @@ namespace PgsqlDataFlow
             return dbPk;
         }
 
-        private static Dictionary<string, string> DbToModel(Span<PropertyInfo> properties)
-        {
-            Dictionary<string, string> dict = [];
-            foreach (PropertyInfo prop in properties)
-            {
-                var col = prop.GetCustomAttribute<ColumnAttribute>();
-                if (col == null) { continue; }
-                if (!string.IsNullOrEmpty(col.Name))
-                    dict.Add(col.Name, prop.Name);
-
-            }
-            return dict;
-        }
-
         /// <summary>
         /// Creates and sends a batch of rows to the database using the binary COPY protocol.
         /// Ensures that the data types of model properties exactly match their corresponding database columns.
@@ -221,9 +212,9 @@ namespace PgsqlDataFlow
 
                 for (int j = 0; j < DbColumns.Count; j++)
                 {
-                    if (DbColumns[j].IsAutoIncrement ?? false) { continue; }
+                    if (DbColumns[j].IsAutoIncrement.HasValue && DbColumns[j].IsAutoIncrement.Value) { continue; }
 
-                    object? value = Properties[j].GetValue(item);
+                    object? value = PropertyAccessors<T>.Getters[ModelColumns[j]](item);
 
                     if (value == null) { writer.WriteNull(); }
 
@@ -281,7 +272,7 @@ namespace PgsqlDataFlow
         /// <exception cref="InvalidOperationException">
         /// Thrown if the database connection is lost during the operation.
         /// </exception>
-        public void UpdateColumnBulk(IEnumerable<T> sourceList, int colIndex)
+        public void UpdateColumnBulk(Span<T> sourceList, int colIndex)
         {
             using var conn = DataSource.OpenConnection();
 
@@ -297,7 +288,8 @@ namespace PgsqlDataFlow
                     + ", "
                     + (colName) + "_temp " + Types[colIndex].ToString().ToLower() + ")";
                 createTempTable.ExecuteNonQuery();
-            };
+            }
+            ;
 
             using (var writer = conn.BeginBinaryImport("COPY " + tempName + " ("
                 + DbPKName + "_temp "
@@ -309,8 +301,8 @@ namespace PgsqlDataFlow
                 {
                     writer.StartRow();
 
-                    object? colValue = Properties[colIndex].GetValue(item);
-                    object? pkValue = Properties[PKIdx].GetValue(item);
+                    object? colValue = PropertyAccessors<T>.Getters[ModelColumns[colIndex]](item);
+                    object? pkValue = PropertyAccessors<T>.Getters[ModelColumns[PKIdx]](item);
 
                     if (pkValue == null) { writer.WriteNull(); }
                     else
@@ -398,7 +390,7 @@ namespace PgsqlDataFlow
 
             using var update = conn.CreateCommand();
             update.CommandText = "UPDATE " + DestinationTableName
-                + " SET " + DbColumns[colIndex] + " = " + tempName + "." + DbColumns[colIndex] + "_temp"
+                + " SET " + DbColumns[colIndex].ColumnName + " = " + tempName + "." + DbColumns[colIndex].ColumnName + "_temp"
                 + " FROM " + tempName + " WHERE " + DestinationTableName + "." + DbPKName + " = " + tempName + "." + DbPKName + "_temp";
 
             Console.WriteLine(update.CommandText);
