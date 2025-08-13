@@ -201,6 +201,18 @@ namespace PgsqlDataFlow
             ConstructTable(writer, sourceList);
             writer.Complete();
         }
+        public void CreateBulk(List<T> sourceList)
+        {
+            if (sourceList.Count == 0 || sourceList.Count> Constants.CHUNKSIZE)
+            {
+                throw new Exception($"Input list is malformed with {sourceList.Count} entries (expected 0 < x <= {Constants.CHUNKSIZE}).");
+            }
+
+            using var conn = DataSource.OpenConnection();
+            using NpgsqlBinaryImporter writer = conn.BeginBinaryImport("COPY " + DestinationTableName + " (" + BuilderCreate.ToString() + ") FROM STDIN (FORMAT BINARY)");
+            ConstructTable(writer, sourceList);
+            writer.Complete();
+        }
 
         private void ConstructTable(NpgsqlBinaryImporter writer, Span<T> sourceList)
         {
@@ -259,6 +271,65 @@ namespace PgsqlDataFlow
                 }
             }
         }
+
+        private void ConstructTable(NpgsqlBinaryImporter writer, List<T> sourceList)
+        {
+            for (int i = 0; i < sourceList.Count; i++)
+            {
+                var item = sourceList[i];
+
+                writer.StartRow();
+
+                for (int j = 0; j < DbColumns.Count; j++)
+                {
+                    if (DbColumns[j].IsAutoIncrement.HasValue && DbColumns[j].IsAutoIncrement.Value) { continue; }
+
+                    object? value = PropertyAccessors<T>.Getters[ModelColumns[j]](item);
+
+                    if (value == null) { writer.WriteNull(); }
+
+                    else
+                    {
+                        switch (Types[j])
+                        {
+                            case NpgsqlDbType.Bigint:
+                                writer.Write((long)value, Types[j]);
+                                break;
+
+                            case NpgsqlDbType.Boolean:
+                                writer.Write((bool)value, Types[j]);
+                                break;
+
+                            case NpgsqlDbType.Integer:
+                                writer.Write((int)value, Types[j]);
+                                break;
+
+                            case NpgsqlDbType.Smallint:
+                                writer.Write((short)value, Types[j]);
+                                break;
+
+                            case NpgsqlDbType.Numeric:
+                                writer.Write((decimal)value, Types[j]);
+                                break;
+
+                            case NpgsqlDbType.Timestamp:
+                            case NpgsqlDbType.Date:
+                                writer.Write(((DateTime)value).SetKind(DateTimeKind.Unspecified), Types[j]);
+                                break;
+
+                            case NpgsqlDbType.TimestampTz:
+                                writer.Write(((DateTime)value).SetKind(DateTimeKind.Utc), Types[j]);
+                                break;
+
+                            case NpgsqlDbType.Varchar:
+                                writer.Write((string)value, Types[j]);
+                                break;
+                        }
+                    }
+                }
+            }
+        }
+
 
         /// <summary>
         /// Updates a specific column in the database for a batch of rows using the binary COPY protocol.
