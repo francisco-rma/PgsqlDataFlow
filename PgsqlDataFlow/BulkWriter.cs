@@ -50,7 +50,7 @@ namespace PgsqlDataFlow
                     throw new Exception("No primary key found");
 
                 DbColumns = cols;
-
+                //TODO encapsulate
                 for (int i = 0; i < cols.Count; i++)
                 {
                     string name = cols[i].ColumnName;
@@ -64,7 +64,9 @@ namespace PgsqlDataFlow
                     }
                 }
 
+
                 Dictionary<string, string> nameMap = [];
+                //TODO encapsulate
                 foreach (PropertyInfo prop in typeof(T).GetProperties())
                 {
                     var col = prop.GetCustomAttribute<ColumnAttribute>();
@@ -82,6 +84,7 @@ namespace PgsqlDataFlow
                 var tempProperties = new PropertyInfo[dbSchema.Count];
 
                 int idx = 0;
+                //TODO figure out if there's a way to annotate Postgresql's expected data type in the model as well
                 foreach ((string colName, NpgsqlDbType colType) in dbSchema)
                 {
                     ModelColumns[idx] = nameMap[colName];
@@ -196,14 +199,6 @@ namespace PgsqlDataFlow
             ConstructTable(writer, sourceList);
             writer.Complete();
         }
-        public void CreateBulk(List<T> sourceList)
-        {
-            using var conn = DataSource.OpenConnection();
-            using NpgsqlBinaryImporter writer = conn.BeginBinaryImport("COPY " + DestinationTableName + " (" + BuilderCreate.ToString() + ") FROM STDIN (FORMAT BINARY)");
-            ConstructTable(writer, sourceList);
-            writer.Complete();
-        }
-
         private void ConstructTable(NpgsqlBinaryImporter writer, Span<T> sourceList)
         {
             for (int i = 0; i < sourceList.Length; i++)
@@ -214,6 +209,8 @@ namespace PgsqlDataFlow
 
                 for (int j = 0; j < DbColumns.Count; j++)
                 {
+                    //TODO make sure that whe a column is autoincrement, the value being sent is either null or the default value of the type
+                    //and encapsulate that logic into another function
                     if (DbColumns[j].IsAutoIncrement.HasValue && DbColumns[j].IsAutoIncrement.Value) { continue; }
 
                     object? value = PropertyAccessors<T>.Getters[ModelColumns[j]](item);
@@ -222,6 +219,7 @@ namespace PgsqlDataFlow
 
                     else
                     {
+                        //TODO encapsulate into another function
                         switch (Types[j])
                         {
                             case NpgsqlDbType.Bigint:
@@ -244,6 +242,8 @@ namespace PgsqlDataFlow
                                 writer.Write((decimal)value, Types[j]);
                                 break;
 
+                            //TODO assert the types are correct instead of converting, avoiding silent errors
+                            //in case the user sends malformed data by mistake
                             case NpgsqlDbType.Timestamp:
                             case NpgsqlDbType.Date:
                                 writer.Write(((DateTime)value).SetKind(DateTimeKind.Unspecified), Types[j]);
@@ -261,65 +261,6 @@ namespace PgsqlDataFlow
                 }
             }
         }
-
-        private void ConstructTable(NpgsqlBinaryImporter writer, List<T> sourceList)
-        {
-            for (int i = 0; i < sourceList.Count; i++)
-            {
-                var item = sourceList[i];
-
-                writer.StartRow();
-
-                for (int j = 0; j < DbColumns.Count; j++)
-                {
-                    if (DbColumns[j].IsAutoIncrement.HasValue && DbColumns[j].IsAutoIncrement.Value) { continue; }
-
-                    object? value = PropertyAccessors<T>.Getters[ModelColumns[j]](item);
-
-                    if (value == null) { writer.WriteNull(); }
-
-                    else
-                    {
-                        switch (Types[j])
-                        {
-                            case NpgsqlDbType.Bigint:
-                                writer.Write((long)value, Types[j]);
-                                break;
-
-                            case NpgsqlDbType.Boolean:
-                                writer.Write((bool)value, Types[j]);
-                                break;
-
-                            case NpgsqlDbType.Integer:
-                                writer.Write((int)value, Types[j]);
-                                break;
-
-                            case NpgsqlDbType.Smallint:
-                                writer.Write((short)value, Types[j]);
-                                break;
-
-                            case NpgsqlDbType.Numeric:
-                                writer.Write((decimal)value, Types[j]);
-                                break;
-
-                            case NpgsqlDbType.Timestamp:
-                            case NpgsqlDbType.Date:
-                                writer.Write(((DateTime)value).SetKind(DateTimeKind.Unspecified), Types[j]);
-                                break;
-
-                            case NpgsqlDbType.TimestampTz:
-                                writer.Write(((DateTime)value).SetKind(DateTimeKind.Utc), Types[j]);
-                                break;
-
-                            case NpgsqlDbType.Varchar:
-                                writer.Write((string)value, Types[j]);
-                                break;
-                        }
-                    }
-                }
-            }
-        }
-
 
         /// <summary>
         /// Updates a specific column in the database for a batch of rows using the binary COPY protocol.

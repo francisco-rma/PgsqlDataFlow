@@ -8,6 +8,8 @@ namespace PgsqlDataFlow.Extensions
 {
     internal static class DateTimeExtensions
     {
+        //TODO modify to "WithKind" to adhere to standards and
+        //double check whether there's really no built in way to change the DateTimeKind
         public static DateTime SetKind(this DateTime date, DateTimeKind kind)
         {
             return new DateTime(date.Ticks, kind);
