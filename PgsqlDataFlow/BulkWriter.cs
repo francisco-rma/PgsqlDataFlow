@@ -191,11 +191,6 @@ namespace PgsqlDataFlow
         /// </exception>
         public void CreateBulk(Span<T> sourceList)
         {
-            if (sourceList.Length == 0 || sourceList.Length > Constants.CHUNKSIZE)
-            {
-                throw new Exception($"Input list is malformed with {sourceList.Length} entries (expected 0 < x <= {Constants.CHUNKSIZE}).");
-            }
-
             using var conn = DataSource.OpenConnection();
             using NpgsqlBinaryImporter writer = conn.BeginBinaryImport("COPY " + DestinationTableName + " (" + BuilderCreate.ToString() + ") FROM STDIN (FORMAT BINARY)");
             ConstructTable(writer, sourceList);
@@ -203,11 +198,6 @@ namespace PgsqlDataFlow
         }
         public void CreateBulk(List<T> sourceList)
         {
-            if (sourceList.Count == 0 || sourceList.Count> Constants.CHUNKSIZE)
-            {
-                throw new Exception($"Input list is malformed with {sourceList.Count} entries (expected 0 < x <= {Constants.CHUNKSIZE}).");
-            }
-
             using var conn = DataSource.OpenConnection();
             using NpgsqlBinaryImporter writer = conn.BeginBinaryImport("COPY " + DestinationTableName + " (" + BuilderCreate.ToString() + ") FROM STDIN (FORMAT BINARY)");
             ConstructTable(writer, sourceList);
