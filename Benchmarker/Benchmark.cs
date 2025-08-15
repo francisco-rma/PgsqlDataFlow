@@ -15,6 +15,15 @@ namespace Benchmarker
         public static void Main()
         {
             _ = BenchmarkRunner.Run<Benchmark>();
+            //var entries = new FtQueue[Constants.CHUNKSIZE];
+            //for (int i = 0; i < entries.Length; i++)
+            //{
+            //    entries[i] = new FtQueue();
+            //}
+
+            //BulkWriter<FtQueue> writer = new(Constants.CONNECTIONSTRING);
+
+            //writer.CreateBulk(entries);
         }
     }
 
@@ -25,7 +34,7 @@ namespace Benchmarker
             Constants.CONNECTIONSTRING,
             opts => { opts.EnableRetryOnFailure(maxRetryCount: 5, maxRetryDelay: TimeSpan.FromSeconds(20), null); }).Options);
 
-        [Params(1000, 10000, 100000)]
+        [Params(10, 100, 1000)]
         public int BatchSize { get; set; }
 
         public BulkWriter<FtQueue> writer { get; set; } = new(Constants.CONNECTIONSTRING);

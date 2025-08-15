@@ -40,10 +40,17 @@ namespace Benchmarker
             doorMedicTime = (decimal)Random.Shared.NextDouble();
             reevaluationTime = (decimal)Random.Shared.NextDouble();
             decisionTime = (decimal)Random.Shared.NextDouble();
+            
             datetimeInclusion = DateTime.UtcNow;
-            isFirstMedic = false;
+            //datetimeInclusion = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Unspecified);
+            
             datetimeStartAttendance = new DateTime(Random.Shared.Next(), DateTimeKind.Utc);
+            //datetimeStartAttendance = new DateTime(Random.Shared.Next(), DateTimeKind.Unspecified);
+            
             datetimeOut = new DateTime(Random.Shared.Next(), DateTimeKind.Utc);
+            //datetimeOut = new DateTime(Random.Shared.Next(), DateTimeKind.Unspecified);
+            
+            isFirstMedic = false;
             timeWait = 0;
             timeAttendance = 0;
             idStatusQueue = Random.Shared.Next();
