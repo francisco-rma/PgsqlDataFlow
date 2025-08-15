@@ -44,53 +44,24 @@ namespace Benchmarker
                 if (exists == null)
                 {
                     Console.WriteLine($"Banco {targetDb} não existe. Criando...");
-                    using (var createCmd = new NpgsqlCommand($"CREATE DATABASE {targetDb}", conn))
-                    {
-                        createCmd.ExecuteNonQuery();
-                    }
+                    using var createCmd = new NpgsqlCommand($"CREATE DATABASE {targetDb}", conn);
+                    createCmd.ExecuteNonQuery();
                 }
                 else
                 {
                     Console.WriteLine($"Banco {targetDb} já existe.");
                 }
-
-                // Passo 2: Conecta no banco "testdb" e cria a tabela se não existir
-
-                string createTableSql = @"
-                CREATE TABLE IF NOT EXISTS public.test_model (
-                    id_test_model BIGSERIAL PRIMARY KEY,
-                    datetime_inclusion TIMESTAMP(0) NOT NULL,
-                    test_measure DOUBLE PRECISION NOT NULL,
-                    test_flag BOOLEAN NOT NULL,
-                    name TEXT NOT NULL
-                );";
-
-                using var tableCmd = new NpgsqlCommand(createTableSql, conn);
-                tableCmd.ExecuteNonQuery();
-                Console.WriteLine("Tabela test_model pronta.");
-
-
-
             }
+
+            // Passo 2: Conecta no banco "testdb" e cria a tabela se não existir
             using var conn2 = new NpgsqlConnection(Constants.CONNECTIONSTRING);
             conn2.Open();
-            string dbPk = "";
-            using (var cmd = new NpgsqlCommand(
-                    "SELECT a.attname " +
-                    "FROM   pg_index i " +
-                    "JOIN   pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) " +
-                    "WHERE  i.indrelid = '" + " test_model " + "'::regclass AND    i.indisprimary; ",
-                    conn2))
-            {
-                using var rdr = cmd.ExecuteReader();
-                while (rdr.Read())
-                {
-                    object[] values = new object[rdr.FieldCount];
-                    rdr.GetValues(values);
-                    dbPk = values[0]?.ToString() ?? throw new Exception("Could not find table primary key, be sure to define one in the database");
-                    Console.WriteLine( dbPk);
-                }
-            }
+
+            string createTableSql = "CREATE TABLE IF NOT EXISTS test_model (id_test_model BIGSERIAL PRIMARY KEY,datetime_inclusion TIMESTAMP(0) NOT NULL,test_measure DOUBLE PRECISION NOT NULL,test_flag BOOLEAN NOT NULL,name TEXT NOT NULL);";
+            using var tableCmd = new NpgsqlCommand(createTableSql, conn2);
+            Console.WriteLine(tableCmd.CommandText);
+            tableCmd.ExecuteNonQuery();
+            Console.WriteLine("Tabela test_model pronta.");
         }
     }
 
