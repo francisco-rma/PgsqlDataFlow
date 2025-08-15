@@ -25,7 +25,13 @@ namespace Benchmarker
         {
             string targetDb = "testdb";
 
-            using (var conn = new NpgsqlConnection(Constants.CONNECTIONSTRING))
+            using (NpgsqlConnection conn = new($"Host={Environment.GetEnvironmentVariable("POSTGRES_HOST") ?? "localhost"};" +
+            $"Port={Environment.GetEnvironmentVariable("POSTGRES_PORT") ?? "5432"};" +
+            $"Pooling=true;" +
+            $"Database=postgres;" +
+            $"User Id=postgres;" +
+            $"Password=postgres;" +
+            $""))
             {
                 conn.Open();
 
@@ -47,7 +53,7 @@ namespace Benchmarker
                 }
 
                 // Passo 2: Conecta no banco "testdb" e cria a tabela se não existir
-                
+
                 string createTableSql = @"
                 CREATE TABLE IF NOT EXISTS public.test_model (
                     id_test_model BIGSERIAL PRIMARY KEY,
@@ -100,7 +106,7 @@ namespace Benchmarker
 
         [Benchmark]
         public void BulkWrite() => writer.CreateBulk(entries);
-        
+
         [Benchmark]
         public void EntityWrite()
         {
