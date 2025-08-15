@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Benchmarker
 {
-    [Table("test_model")]
+    [Table("test_model", Schema = "public")]
     public class TestModel
     {
         public TestModel()
