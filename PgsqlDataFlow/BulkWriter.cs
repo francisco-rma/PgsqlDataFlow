@@ -201,7 +201,9 @@ namespace PgsqlDataFlow
                     if (DbColumns[j].IsAutoIncrement.HasValue && DbColumns[j].IsAutoIncrement.Value)
                     {
                         if (value is not null && !IsDefault(BulkWriter<T>.TypeSwitch(Types[j], value)))
-                            throw new Exception($"Auto increment column\n({DbColumns[j].DataTypeName}){DbColumns[j].ColumnName}:{ModelColumns[j]}\nshould be null");
+                            throw new Exception($"Auto increment column\n" +
+                                $"({DbColumns[j].DataTypeName}){DbColumns[j].ColumnName}:{ModelColumns[j]}" +
+                                $"\nshould be null");
 
                         continue;
                     }
@@ -300,7 +302,6 @@ namespace PgsqlDataFlow
             writer.Dispose();
             return;
         }
-
         private static Dictionary<string, string> GenerateNameMap()
         {
             Dictionary<string, string> nameMap = [];
@@ -316,7 +317,6 @@ namespace PgsqlDataFlow
             if (nameMap.Count < 1) throw new Exception("Table must have at least 1 column");
             return nameMap;
         }
-
         private static dynamic TypeSwitch(NpgsqlDbType type, object value)
         {
             switch (type)
@@ -350,7 +350,6 @@ namespace PgsqlDataFlow
                     return value;
             }
         }
-
         public bool IsDefault<D>(D value)
         {
             bool result = EqualityComparer<D>.Default.Equals(value, default(D));
