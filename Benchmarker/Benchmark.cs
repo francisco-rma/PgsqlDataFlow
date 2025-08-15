@@ -3,10 +3,13 @@ using BenchmarkDotNet.Running;
 using CsvHelper;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Npgsql;
 using PgsqlDataFlow;
+using System;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Globalization;
 using System.Reflection;
+using System.Xml.Linq;
 
 namespace Benchmarker
 {
@@ -14,7 +17,50 @@ namespace Benchmarker
     {
         public static void Main()
         {
+            TestPostgresConnection();
             _ = BenchmarkRunner.Run<Benchmark>();
+        }
+
+        public static void TestPostgresConnection()
+        {
+            string targetDb = "testdb";
+
+            using (var conn = new NpgsqlConnection(Constants.CONNECTIONSTRING))
+            {
+                conn.Open();
+
+                using var cmd = new NpgsqlCommand($"SELECT 1 FROM pg_database WHERE datname = @dbname", conn);
+                cmd.Parameters.AddWithValue("dbname", targetDb);
+                var exists = cmd.ExecuteScalar();
+
+                if (exists == null)
+                {
+                    Console.WriteLine($"Banco {targetDb} não existe. Criando...");
+                    using (var createCmd = new NpgsqlCommand($"CREATE DATABASE {targetDb}", conn))
+                    {
+                        createCmd.ExecuteNonQuery();
+                    }
+                }
+                else
+                {
+                    Console.WriteLine($"Banco {targetDb} já existe.");
+                }
+
+                // Passo 2: Conecta no banco "testdb" e cria a tabela se não existir
+                
+                string createTableSql = @"
+                CREATE TABLE IF NOT EXISTS public.test_model (
+                    id_test_model BIGSERIAL PRIMARY KEY,
+                    datetime_inclusion TIMESTAMP(0) NOT NULL,
+                    test_measure DOUBLE PRECISION NOT NULL,
+                    test_flag BOOLEAN NOT NULL,
+                    name TEXT NOT NULL
+                );";
+
+                using var tableCmd = new NpgsqlCommand(createTableSql, conn);
+                tableCmd.ExecuteNonQuery();
+                Console.WriteLine("Tabela test_model pronta.");
+            }
         }
     }
 
@@ -28,18 +74,18 @@ namespace Benchmarker
         [Params(100, 1000, 10000)]
         public int BatchSize { get; set; }
 
-        public BulkWriter<FtQueue> writer { get; set; } = new(Constants.CONNECTIONSTRING);
+        public BulkWriter<TestModel> writer { get; set; } = new(Constants.CONNECTIONSTRING);
 
-        public FtQueue[] entries { get; set; } = [];
+        public TestModel[] entries { get; set; } = [];
 
         [GlobalSetup]
         [IterationSetup]
         public void InitializeEntries()
         {
-            entries = new FtQueue[BatchSize];
+            entries = new TestModel[BatchSize];
             for (int i = 0; i < entries.Length; i++)
             {
-                entries[i] = new FtQueue();
+                entries[i] = new TestModel();
             }
         }
 
@@ -48,7 +94,7 @@ namespace Benchmarker
         {
             using var conn = writer.DataSource.OpenConnection();
             using var truncateCommand = conn.CreateCommand();
-            truncateCommand.CommandText = "TRUNCATE TABLE public.ft_queue RESTART IDENTITY RESTRICT;\r\n";
+            truncateCommand.CommandText = "TRUNCATE TABLE public.test_model RESTART IDENTITY RESTRICT;\r\n";
             truncateCommand.ExecuteNonQuery();
         }
 
@@ -63,14 +109,14 @@ namespace Benchmarker
             context.SaveChanges();
         }
 
-        private IEnumerable<FtQueue> HandRolledReadCsv(string path)
+        private IEnumerable<TestModel> HandRolledReadCsv(string path)
         {
-            List<FtQueue> result = [];
+            List<TestModel> result = [];
             using (var reader = new StreamReader(path))
             {
                 string[] columns = (reader.ReadLine() ?? "").Replace("\"", "").Split(',');
 
-                PropertyInfo[] properties = typeof(FtQueue).GetProperties();
+                PropertyInfo[] properties = typeof(TestModel).GetProperties();
                 for (int idx = 0; idx < columns.Length; idx++)
                 {
                     string col = columns[idx];
@@ -101,7 +147,7 @@ namespace Benchmarker
                 {
                     string[] values = line.Split(',');
 
-                    Activator.CreateInstance(typeof(FtQueue), values);
+                    Activator.CreateInstance(typeof(TestModel), values);
                 }
             }
             return result;
