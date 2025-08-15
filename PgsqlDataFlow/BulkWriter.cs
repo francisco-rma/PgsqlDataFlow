@@ -220,6 +220,48 @@ namespace PgsqlDataFlow
             }
         }
 
+        public async void CreateBulkAsync(Memory<T> sourceMemory)
+        {
+            using var conn = DataSource.OpenConnection();
+            using NpgsqlBinaryImporter writer = conn.BeginBinaryImport("COPY " + DestinationTableName + " (" + BuilderCreate.ToString() + ") FROM STDIN (FORMAT BINARY)");
+            ConstructTableAsync(writer, sourceMemory);
+            await writer.CompleteAsync();
+        }
+
+        private async void ConstructTableAsync(NpgsqlBinaryImporter writer, Memory<T> sourceMemory)
+        {
+            for (int i = 0; i < sourceMemory.Span.Length; i++)
+            {
+                var item = sourceMemory.Span[i];
+
+                await writer.StartRowAsync();
+
+                for (int j = 0; j < DbColumns.Count; j++)
+                {
+                    object? value = PropertyAccessors<T>.Getters[ModelColumns[j]](item);
+
+                    if (DbColumns[j].IsAutoIncrement.HasValue && DbColumns[j].IsAutoIncrement.Value)
+                    {
+                        if (value is not null && !IsDefault(BulkWriter<T>.TypeSwitch(Types[j], value)))
+                            throw new Exception($"Auto increment column\n" +
+                                $"({DbColumns[j].DataTypeName}){DbColumns[j].ColumnName}:{ModelColumns[j]}" +
+                                $"\nshould be null");
+
+                        continue;
+                    }
+
+                    if (value is null)
+                    {
+                        await writer.WriteNullAsync();
+                    }
+                    else
+                    {
+                        await writer.WriteAsync(BulkWriter<T>.TypeSwitch(Types[j], value));
+                    }
+                }
+            }
+        }
+
         /// <summary>
         /// Updates a specific column in the database for a batch of rows using the binary COPY protocol.
         /// Ensures that the data types of model properties exactly match their corresponding database columns.
