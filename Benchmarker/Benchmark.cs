@@ -34,7 +34,7 @@ namespace Benchmarker
             Constants.CONNECTIONSTRING,
             opts => { opts.EnableRetryOnFailure(maxRetryCount: 5, maxRetryDelay: TimeSpan.FromSeconds(20), null); }).Options);
 
-        [Params(10, 100, 1000)]
+        [Params(1000, 10000, 100000)]
         public int BatchSize { get; set; }
 
         public BulkWriter<FtQueue> writer { get; set; } = new(Constants.CONNECTIONSTRING);
@@ -63,14 +63,17 @@ namespace Benchmarker
 
         [Benchmark]
         public void BulkWrite() => writer.CreateBulk(entries);
-
+        
         [Benchmark]
-        public void EntityWrite()
-        {
-            using var context = contextFactory.CreateDbContext();
-            context.AddRange(entries);
-            context.SaveChanges();
-        }
+        public void BulkWriteAsync() => writer.CreateBulkAsync(entries);
+
+        //[Benchmark]
+        //public void EntityWrite()
+        //{
+        //    using var context = contextFactory.CreateDbContext();
+        //    context.AddRange(entries);
+        //    context.SaveChanges();
+        //}
 
         private IEnumerable<FtQueue> HandRolledReadCsv(string path)
         {
