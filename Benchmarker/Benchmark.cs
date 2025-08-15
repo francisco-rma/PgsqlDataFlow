@@ -34,7 +34,7 @@ namespace Benchmarker
             Constants.CONNECTIONSTRING,
             opts => { opts.EnableRetryOnFailure(maxRetryCount: 5, maxRetryDelay: TimeSpan.FromSeconds(20), null); }).Options);
 
-        [Params(1000, 10000, 100000)]
+        [Params(100, 1000, 10000)]
         public int BatchSize { get; set; }
 
         public BulkWriter<FtQueue> writer { get; set; } = new(Constants.CONNECTIONSTRING);
