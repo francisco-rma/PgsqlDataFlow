@@ -1,7 +1,6 @@
 ﻿using Npgsql;
 using Npgsql.Schema;
 using NpgsqlTypes;
-using PgsqlDataFlow.Extensions;
 using System.Collections.ObjectModel;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
@@ -201,7 +200,7 @@ namespace PgsqlDataFlow
 
                     if (DbColumns[j].IsAutoIncrement.HasValue && DbColumns[j].IsAutoIncrement.Value)
                     {
-                        if (value is not null && !IsDefault(TypeSwitch(Types[j], value)))
+                        if (value is not null && !IsDefault(BulkWriter<T>.TypeSwitch(Types[j], value)))
                             throw new Exception($"Auto increment column\n({DbColumns[j].DataTypeName}){DbColumns[j].ColumnName}:{ModelColumns[j]}\nshould be null");
 
                         continue;
@@ -213,7 +212,7 @@ namespace PgsqlDataFlow
                     }
                     else
                     {
-                        writer.Write(TypeSwitch(Types[j], value));
+                        writer.Write(BulkWriter<T>.TypeSwitch(Types[j], value));
                     }
                 }
             }
@@ -263,87 +262,24 @@ namespace PgsqlDataFlow
                     object? colValue = PropertyAccessors<T>.Getters[ModelColumns[colIndex]](item);
                     object? pkValue = PropertyAccessors<T>.Getters[ModelColumns[PKIdx]](item);
 
-                    if (pkValue == null) { writer.WriteNull(); }
+                    if (pkValue is null)
+                    {
+                        writer.WriteNull();
+                    }
                     else
                     {
-                        switch (Types[PKIdx])
-                        {
-                            case NpgsqlDbType.Bigint:
-                                writer.Write((long)pkValue, Types[PKIdx]);
-                                break;
-
-                            case NpgsqlDbType.Boolean:
-                                writer.Write((bool)pkValue, Types[PKIdx]);
-                                break;
-
-                            case NpgsqlDbType.Integer:
-                                writer.Write((int)pkValue, Types[PKIdx]);
-                                break;
-
-                            case NpgsqlDbType.Smallint:
-                                writer.Write((short)pkValue, Types[PKIdx]);
-                                break;
-
-                            case NpgsqlDbType.Numeric:
-                                writer.Write((decimal)pkValue, Types[PKIdx]);
-                                break;
-
-                            case NpgsqlDbType.Timestamp:
-                            case NpgsqlDbType.Date:
-                                writer.Write(((DateTime)pkValue).SetKind(DateTimeKind.Unspecified), Types[PKIdx]);
-                                break;
-
-                            case NpgsqlDbType.TimestampTz:
-                                writer.Write(((DateTime)pkValue).SetKind(DateTimeKind.Utc), Types[PKIdx]);
-                                break;
-
-                            case NpgsqlDbType.Varchar:
-                                writer.Write((string)pkValue, Types[PKIdx]);
-                                break;
-                        }
+                        writer.Write(BulkWriter<T>.TypeSwitch(Types[colIndex], pkValue));
                     }
 
-                    if (colValue == null) { writer.WriteNull(); }
+                    if (colValue is null)
+                    {
+                        writer.WriteNull();
+                    }
                     else
                     {
-                        switch (Types[colIndex])
-                        {
-                            case NpgsqlDbType.Bigint:
-                                writer.Write((long)colValue, Types[colIndex]);
-                                break;
-
-                            case NpgsqlDbType.Boolean:
-                                writer.Write((bool)colValue, Types[colIndex]);
-                                break;
-
-                            case NpgsqlDbType.Integer:
-                                writer.Write((int)colValue, Types[colIndex]);
-                                break;
-
-                            case NpgsqlDbType.Smallint:
-                                writer.Write((short)colValue, Types[colIndex]);
-                                break;
-
-                            case NpgsqlDbType.Numeric:
-                                writer.Write((decimal)colValue, Types[colIndex]);
-                                break;
-
-                            case NpgsqlDbType.Timestamp:
-                            case NpgsqlDbType.Date:
-                                writer.Write(((DateTime)colValue).SetKind(DateTimeKind.Unspecified), Types[colIndex]);
-                                break;
-
-                            case NpgsqlDbType.TimestampTz:
-                                writer.Write(((DateTime)colValue).SetKind(DateTimeKind.Utc), Types[colIndex]);
-                                break;
-
-                            case NpgsqlDbType.Varchar:
-                                writer.Write((string)colValue, Types[colIndex]);
-                                break;
-                        }
+                        writer.Write(BulkWriter<T>.TypeSwitch(Types[colIndex], colValue));
                     }
                 }
-
                 writer.Complete();
             }
 
@@ -383,29 +319,36 @@ namespace PgsqlDataFlow
 
         private static dynamic TypeSwitch(NpgsqlDbType type, object value)
         {
-            return type switch
+            switch (type)
             {
-                NpgsqlDbType.Bigint => (long)value,
+                case NpgsqlDbType.Bigint:
+                    return (long)value;
 
-                NpgsqlDbType.Boolean => (bool)value,
+                case NpgsqlDbType.Boolean:
+                    return (bool)value;
 
-                NpgsqlDbType.Integer => (int)value,
+                case NpgsqlDbType.Integer:
+                    return (int)value;
 
-                NpgsqlDbType.Smallint => (short)value,
+                case NpgsqlDbType.Smallint:
+                    return (short)value;
 
-                NpgsqlDbType.Numeric => (decimal)value,
+                case NpgsqlDbType.Numeric:
+                    return (decimal)value;
 
-                //TODO assert the types are correct instead of converting, avoiding silent errors
-                //in the user sends malformed data by mistak =>
-                NpgsqlDbType.Timestamp => ((DateTime)value).SetKind(DateTimeKind.Unspecified),
-                NpgsqlDbType.Date => ((DateTime)value).SetKind(DateTimeKind.Unspecified),
+                case NpgsqlDbType.Timestamp:
+                case NpgsqlDbType.Date:
+                    return DateTime.SpecifyKind((DateTime)value, DateTimeKind.Unspecified);
 
-                NpgsqlDbType.TimestampTz => ((DateTime)value).SetKind(DateTimeKind.Utc),
+                case NpgsqlDbType.TimestampTz:
+                    return DateTime.SpecifyKind((DateTime)value, DateTimeKind.Utc);
 
-                NpgsqlDbType.Varchar => (string)value,
+                case NpgsqlDbType.Varchar:
+                    return (string)value;
 
-                _ => value,
-            };
+                default:
+                    return value;
+            }
         }
 
         public bool IsDefault<D>(D value)
