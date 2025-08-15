@@ -15,15 +15,6 @@ namespace Benchmarker
         public static void Main()
         {
             _ = BenchmarkRunner.Run<Benchmark>();
-            //var entries = new FtQueue[Constants.CHUNKSIZE];
-            //for (int i = 0; i < entries.Length; i++)
-            //{
-            //    entries[i] = new FtQueue();
-            //}
-
-            //BulkWriter<FtQueue> writer = new(Constants.CONNECTIONSTRING);
-
-            //writer.CreateBulk(entries);
         }
     }
 
@@ -65,15 +56,12 @@ namespace Benchmarker
         public void BulkWrite() => writer.CreateBulk(entries);
         
         [Benchmark]
-        public void BulkWriteAsync() => writer.CreateBulkAsync(entries);
-
-        //[Benchmark]
-        //public void EntityWrite()
-        //{
-        //    using var context = contextFactory.CreateDbContext();
-        //    context.AddRange(entries);
-        //    context.SaveChanges();
-        //}
+        public void EntityWrite()
+        {
+            using var context = contextFactory.CreateDbContext();
+            context.AddRange(entries);
+            context.SaveChanges();
+        }
 
         private IEnumerable<FtQueue> HandRolledReadCsv(string path)
         {
