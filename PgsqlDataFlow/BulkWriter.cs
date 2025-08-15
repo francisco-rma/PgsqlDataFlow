@@ -5,7 +5,6 @@ using PgsqlDataFlow.Extensions;
 using System.Collections.ObjectModel;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
-using System.Linq.Expressions;
 using System.Reflection;
 using System.Text;
 
@@ -50,7 +49,6 @@ namespace PgsqlDataFlow
                     throw new Exception("No primary key found");
 
                 DbColumns = cols;
-                //TODO encapsulate
                 for (int i = 0; i < cols.Count; i++)
                 {
                     string name = cols[i].ColumnName;
@@ -64,19 +62,8 @@ namespace PgsqlDataFlow
                     }
                 }
 
+                Dictionary<string, string> nameMap = GenerateNameMap();
 
-                Dictionary<string, string> nameMap = [];
-                //TODO encapsulate
-                foreach (PropertyInfo prop in typeof(T).GetProperties())
-                {
-                    var col = prop.GetCustomAttribute<ColumnAttribute>();
-                    if (col is not null && !string.IsNullOrEmpty(col.Name))
-                    {
-                        nameMap[col.Name] = prop.Name;
-                    }
-                }
-
-                if (nameMap.Count < 1) throw new Exception("Table must have at least 1 column");
                 if (nameMap.Count != dbSchema.Count) throw new Exception("Model and database schema do not match");
 
                 Types = new NpgsqlDbType[dbSchema.Count];
@@ -84,6 +71,7 @@ namespace PgsqlDataFlow
                 var tempProperties = new PropertyInfo[dbSchema.Count];
 
                 int idx = 0;
+
                 //TODO figure out if there's a way to annotate Postgresql's expected data type in the model as well
                 foreach ((string colName, NpgsqlDbType colType) in dbSchema)
                 {
@@ -209,54 +197,23 @@ namespace PgsqlDataFlow
 
                 for (int j = 0; j < DbColumns.Count; j++)
                 {
-                    //TODO make sure that whe a column is autoincrement, the value being sent is either null or the default value of the type
-                    //and encapsulate that logic into another function
-                    if (DbColumns[j].IsAutoIncrement.HasValue && DbColumns[j].IsAutoIncrement.Value) { continue; }
-
                     object? value = PropertyAccessors<T>.Getters[ModelColumns[j]](item);
 
-                    if (value == null) { writer.WriteNull(); }
+                    if (DbColumns[j].IsAutoIncrement.HasValue && DbColumns[j].IsAutoIncrement.Value)
+                    {
+                        if (value is not null && !IsDefault(TypeSwitch(Types[j], value)))
+                            throw new Exception($"Auto increment column\n({DbColumns[j].DataTypeName}){DbColumns[j].ColumnName}:{ModelColumns[j]}\nshould be null");
 
+                        continue;
+                    }
+
+                    if (value is null)
+                    {
+                        writer.WriteNull();
+                    }
                     else
                     {
-                        //TODO encapsulate into another function
-                        switch (Types[j])
-                        {
-                            case NpgsqlDbType.Bigint:
-                                writer.Write((long)value, Types[j]);
-                                break;
-
-                            case NpgsqlDbType.Boolean:
-                                writer.Write((bool)value, Types[j]);
-                                break;
-
-                            case NpgsqlDbType.Integer:
-                                writer.Write((int)value, Types[j]);
-                                break;
-
-                            case NpgsqlDbType.Smallint:
-                                writer.Write((short)value, Types[j]);
-                                break;
-
-                            case NpgsqlDbType.Numeric:
-                                writer.Write((decimal)value, Types[j]);
-                                break;
-
-                            //TODO assert the types are correct instead of converting, avoiding silent errors
-                            //in case the user sends malformed data by mistake
-                            case NpgsqlDbType.Timestamp:
-                            case NpgsqlDbType.Date:
-                                writer.Write(((DateTime)value).SetKind(DateTimeKind.Unspecified), Types[j]);
-                                break;
-
-                            case NpgsqlDbType.TimestampTz:
-                                writer.Write(((DateTime)value).SetKind(DateTimeKind.Utc), Types[j]);
-                                break;
-
-                            case NpgsqlDbType.Varchar:
-                                writer.Write((string)value, Types[j]);
-                                break;
-                        }
+                        writer.Write(TypeSwitch(Types[j], value));
                     }
                 }
             }
@@ -406,6 +363,55 @@ namespace PgsqlDataFlow
             ConstructTable(writer, source);
             writer.Dispose();
             return;
+        }
+
+        private static Dictionary<string, string> GenerateNameMap()
+        {
+            Dictionary<string, string> nameMap = [];
+            foreach (PropertyInfo prop in typeof(T).GetProperties())
+            {
+                var col = prop.GetCustomAttribute<ColumnAttribute>();
+                if (col is not null && !string.IsNullOrEmpty(col.Name))
+                {
+                    nameMap[col.Name] = prop.Name;
+                }
+            }
+
+            if (nameMap.Count < 1) throw new Exception("Table must have at least 1 column");
+            return nameMap;
+        }
+
+        private static dynamic TypeSwitch(NpgsqlDbType type, object value)
+        {
+            return type switch
+            {
+                NpgsqlDbType.Bigint => (long)value,
+
+                NpgsqlDbType.Boolean => (bool)value,
+
+                NpgsqlDbType.Integer => (int)value,
+
+                NpgsqlDbType.Smallint => (short)value,
+
+                NpgsqlDbType.Numeric => (decimal)value,
+
+                //TODO assert the types are correct instead of converting, avoiding silent errors
+                //in the user sends malformed data by mistak =>
+                NpgsqlDbType.Timestamp => ((DateTime)value).SetKind(DateTimeKind.Unspecified),
+                NpgsqlDbType.Date => ((DateTime)value).SetKind(DateTimeKind.Unspecified),
+
+                NpgsqlDbType.TimestampTz => ((DateTime)value).SetKind(DateTimeKind.Utc),
+
+                NpgsqlDbType.Varchar => (string)value,
+
+                _ => value,
+            };
+        }
+
+        public bool IsDefault<D>(D value)
+        {
+            bool result = EqualityComparer<D>.Default.Equals(value, default(D));
+            return result;
         }
     }
 }
