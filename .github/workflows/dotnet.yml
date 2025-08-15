@@ -11,13 +11,13 @@ on:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
     env:
         # The hostname used to communicate with the PostgreSQL service container
         POSTGRES_HOST: postgres
         # The default PostgreSQL port
         POSTGRES_PORT: 5432
+        
     steps:
     - uses: actions/checkout@v4
     - name: Setup .NET
@@ -31,4 +31,5 @@ jobs:
     - name: Test
       run: dotnet test --no-build --verbosity normal
     - name: Benchmark
+
       run: dotnet run --project Benchmarker -c=Release
