@@ -3,6 +3,7 @@ using BenchmarkDotNet.Running;
 using CsvHelper;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Metadata.Internal;
 using Npgsql;
 using PgsqlDataFlow;
 using System;
@@ -10,6 +11,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 using System.Globalization;
 using System.Reflection;
 using System.Xml.Linq;
+using static Microsoft.EntityFrameworkCore.DbLoggerCategory.Database;
 
 namespace Benchmarker
 {
@@ -66,6 +68,28 @@ namespace Benchmarker
                 using var tableCmd = new NpgsqlCommand(createTableSql, conn);
                 tableCmd.ExecuteNonQuery();
                 Console.WriteLine("Tabela test_model pronta.");
+
+
+
+            }
+            using var conn2 = new NpgsqlConnection(Constants.CONNECTIONSTRING);
+            conn2.Open();
+            string dbPk = "";
+            using (var cmd = new NpgsqlCommand(
+                    "SELECT a.attname " +
+                    "FROM   pg_index i " +
+                    "JOIN   pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) " +
+                    "WHERE  i.indrelid = '" + " test_model " + "'::regclass AND    i.indisprimary; ",
+                    conn2))
+            {
+                using var rdr = cmd.ExecuteReader();
+                while (rdr.Read())
+                {
+                    object[] values = new object[rdr.FieldCount];
+                    rdr.GetValues(values);
+                    dbPk = values[0]?.ToString() ?? throw new Exception("Could not find table primary key, be sure to define one in the database");
+                    Console.WriteLine( dbPk);
+                }
             }
         }
     }
