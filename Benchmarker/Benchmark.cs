@@ -3,15 +3,11 @@ using BenchmarkDotNet.Running;
 using CsvHelper;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
-using Microsoft.EntityFrameworkCore.Metadata.Internal;
 using Npgsql;
 using PgsqlDataFlow;
-using System;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Globalization;
 using System.Reflection;
-using System.Xml.Linq;
-using static Microsoft.EntityFrameworkCore.DbLoggerCategory.Database;
 
 namespace Benchmarker
 {
@@ -72,41 +68,41 @@ namespace Benchmarker
             Constants.CONNECTIONSTRING,
             opts => { opts.EnableRetryOnFailure(maxRetryCount: 5, maxRetryDelay: TimeSpan.FromSeconds(20), null); }).Options);
 
-        [Params(100, 1000, 10000)]
+        [Params(50, 5000, 500000)]
         public int BatchSize { get; set; }
 
-        public BulkWriter<TestModel> writer { get; set; } = new(Constants.CONNECTIONSTRING);
+        public BulkWriter<TestModel> Writer { get; set; } = new(Constants.CONNECTIONSTRING);
 
-        public TestModel[] entries { get; set; } = [];
+        public TestModel[] Entries { get; set; } = [];
 
         [GlobalSetup]
         [IterationSetup]
         public void InitializeEntries()
         {
-            entries = new TestModel[BatchSize];
-            for (int i = 0; i < entries.Length; i++)
+            Entries = new TestModel[BatchSize];
+            for (int i = 0; i < Entries.Length; i++)
             {
-                entries[i] = new TestModel();
+                Entries[i] = new TestModel();
             }
         }
 
         [IterationCleanup]
         public void TruncateTable()
         {
-            using var conn = writer.DataSource.OpenConnection();
+            using var conn = Writer.DataSource.OpenConnection();
             using var truncateCommand = conn.CreateCommand();
             truncateCommand.CommandText = "TRUNCATE TABLE public.test_model RESTART IDENTITY RESTRICT;\r\n";
             truncateCommand.ExecuteNonQuery();
         }
 
         [Benchmark]
-        public void BulkWrite() => writer.CreateBulk(entries);
+        public void BulkWrite() => Writer.CreateBulk(Entries);
 
         [Benchmark]
         public void EntityWrite()
         {
             using var context = contextFactory.CreateDbContext();
-            context.AddRange(entries);
+            context.AddRange(Entries);
             context.SaveChanges();
         }
 
