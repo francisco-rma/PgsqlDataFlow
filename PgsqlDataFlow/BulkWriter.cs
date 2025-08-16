@@ -1,7 +1,6 @@
 ﻿using Npgsql;
 using Npgsql.Schema;
 using NpgsqlTypes;
-using System.Collections.ObjectModel;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Reflection;
