@@ -1,13 +1,9 @@
 ﻿using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Running;
-using CsvHelper;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Npgsql;
 using PgsqlDataFlow;
-using System.ComponentModel.DataAnnotations.Schema;
-using System.Globalization;
-using System.Reflection;
 
 namespace Benchmarker
 {
@@ -18,7 +14,6 @@ namespace Benchmarker
             TestPostgresConnection();
             _ = BenchmarkRunner.Run<Benchmark>();
         }
-
         public static void TestPostgresConnection()
         {
             string targetDb = "testdb";
@@ -68,7 +63,7 @@ namespace Benchmarker
             Constants.CONNECTIONSTRING,
             opts => { opts.EnableRetryOnFailure(maxRetryCount: 5, maxRetryDelay: TimeSpan.FromSeconds(20), null); }).Options);
 
-        [Params(50, 5000, 500000)]
+        [Params(50, 5000, 50000)]
         public int BatchSize { get; set; }
 
         public BulkWriter<TestModel> Writer { get; set; } = new(Constants.CONNECTIONSTRING);
@@ -104,57 +99,6 @@ namespace Benchmarker
             using var context = contextFactory.CreateDbContext();
             context.AddRange(Entries);
             context.SaveChanges();
-        }
-
-        private IEnumerable<TestModel> HandRolledReadCsv(string path)
-        {
-            List<TestModel> result = [];
-            using (var reader = new StreamReader(path))
-            {
-                string[] columns = (reader.ReadLine() ?? "").Replace("\"", "").Split(',');
-
-                PropertyInfo[] properties = typeof(TestModel).GetProperties();
-                for (int idx = 0; idx < columns.Length; idx++)
-                {
-                    string col = columns[idx];
-                    int j = 0;
-                    while (j <= properties.Length - 1)
-                    {
-                        var colAnnotation = properties[j].GetCustomAttribute<ColumnAttribute>();
-                        if (colAnnotation == null) { continue; }
-
-                        if (colAnnotation.Name == col)
-                        {
-                            (properties[idx], properties[j]) = (properties[j], properties[idx]);
-                            break;
-                        }
-                        else
-                        {
-                            j += 1;
-                        }
-                    }
-                }
-
-                if (columns.Length != properties.Length)
-                {
-                    throw new Exception("Columns count does not match properties count");
-                }
-
-                for (string? line = reader.ReadLine(); line != null; line = reader.ReadLine())
-                {
-                    string[] values = line.Split(',');
-
-                    Activator.CreateInstance(typeof(TestModel), values);
-                }
-            }
-            return result;
-        }
-
-        private static T[] ReadCsv<T>(string path)
-        {
-            using var reader = new StreamReader(path);
-            var records = new CsvReader(reader, CultureInfo.InvariantCulture).GetRecords<T>();
-            return records.ToArray();
         }
     }
 }
