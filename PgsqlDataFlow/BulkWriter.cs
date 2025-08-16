@@ -67,7 +67,6 @@ namespace PgsqlDataFlow
 
                 int idx = 0;
 
-                //TODO figure out if there's a way to annotate Postgresql's expected data type in the model as well
                 foreach ((string colName, NpgsqlDbType colType) in dbSchema)
                 {
                     TypeModelBindings[idx] = new Tuple<string, NpgsqlDbType, NpgsqlDbColumn>(
@@ -200,68 +199,17 @@ namespace PgsqlDataFlow
 
                 for (int j = 0; j < TypeModelBindings.Length; j++)
                 {
-                    object? value = PropertyAccessors<T>.Getters[TypeModelBindings[j].Item1](item);
+                    Tuple<string, NpgsqlDbType, NpgsqlDbColumn> typeBinding = TypeModelBindings[j];
+                    object? value = PropertyAccessors<T>.Getters[typeBinding.Item1](item);
 
-                    if (TypeModelBindings[j].Item3.IsAutoIncrement.HasValue && TypeModelBindings[j].Item3.IsAutoIncrement.Value)
-                    {
-                        if (value is not null && !IsDefault(BulkWriter<T>.TypeSwitch(TypeModelBindings[j].Item2, value)))
-                            throw new Exception($"Auto increment column\n" +
-                                $"({TypeModelBindings[j].Item3.DataTypeName}){TypeModelBindings[j].Item3.ColumnName}:{TypeModelBindings[j].Item1}" +
-                                $"\nshould be null");
-
+                    if (CheckAutoIncrement(typeBinding, value))
                         continue;
-                    }
 
                     if (value is null)
-                    {
                         writer.WriteNull();
-                    }
+
                     else
-                    {
-                        writer.Write(BulkWriter<T>.TypeSwitch(TypeModelBindings[j].Item2, value));
-                    }
-                }
-            }
-        }
-
-        public async void CreateBulkAsync(Memory<T> sourceMemory)
-        {
-            using var conn = DataSource.OpenConnection();
-            using NpgsqlBinaryImporter writer = conn.BeginBinaryImport("COPY " + DestinationTableName + " (" + BuilderCreate.ToString() + ") FROM STDIN (FORMAT BINARY)");
-            ConstructTableAsync(writer, sourceMemory);
-            await writer.CompleteAsync();
-        }
-
-        private async void ConstructTableAsync(NpgsqlBinaryImporter writer, Memory<T> sourceMemory)
-        {
-            for (int i = 0; i < sourceMemory.Span.Length; i++)
-            {
-                var item = sourceMemory.Span[i];
-
-                await writer.StartRowAsync();
-
-                for (int j = 0; j < TypeModelBindings.Length; j++)
-                {
-                    object? value = PropertyAccessors<T>.Getters[TypeModelBindings[j].Item1](item);
-
-                    if (TypeModelBindings[j].Item3.IsAutoIncrement.HasValue && TypeModelBindings[j].Item3.IsAutoIncrement.Value)
-                    {
-                        if (value is not null && !IsDefault(BulkWriter<T>.TypeSwitch(TypeModelBindings[j].Item2, value)))
-                            throw new Exception($"Auto increment column\n" +
-                                $"({TypeModelBindings[j].Item3.DataTypeName}){TypeModelBindings[j].Item3.ColumnName}:{TypeModelBindings[j].Item1}" +
-                                $"\nshould be null");
-
-                        continue;
-                    }
-
-                    if (value is null)
-                    {
-                        await writer.WriteNullAsync();
-                    }
-                    else
-                    {
-                        await writer.WriteAsync(BulkWriter<T>.TypeSwitch(TypeModelBindings[j].Item2, value));
-                    }
+                        writer.Write(TypeSwitch(typeBinding.Item2, value));
                 }
             }
         }
@@ -400,6 +348,19 @@ namespace PgsqlDataFlow
         {
             bool result = EqualityComparer<D>.Default.Equals(value, default(D));
             return result;
+        }
+        public bool CheckAutoIncrement(Tuple<string, NpgsqlDbType, NpgsqlDbColumn> typeBinding, object? value)
+        {
+            if (typeBinding.Item3.IsAutoIncrement.HasValue && typeBinding.Item3.IsAutoIncrement.Value)
+            {
+                if (value is not null && !IsDefault(TypeSwitch(typeBinding.Item2, value)))
+                    throw new Exception($"Auto increment column\n" +
+                        $"({typeBinding.Item3.DataTypeName}){typeBinding.Item3.ColumnName}:{typeBinding.Item1}" +
+                        $"\nshould be null");
+                return true;
+            }
+
+            return false;
         }
     }
 }
