@@ -1,9 +1,4 @@
 ﻿using NpgsqlTypes;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace PgsqlDataFlow
 {
@@ -28,7 +23,7 @@ namespace PgsqlDataFlow
             [typeof(double)] = [NpgsqlDbType.Double],
             [typeof(decimal)] = [NpgsqlDbType.Numeric],
             [typeof(char)] = [NpgsqlDbType.Char],
-            [typeof(string)] = [NpgsqlDbType.Varchar],
+            [typeof(string)] = [NpgsqlDbType.Varchar, NpgsqlDbType.Text],
             [typeof(DateTime)] = [NpgsqlDbType.Timestamp, NpgsqlDbType.Date, NpgsqlDbType.TimestampTz],
             [typeof(TimeSpan)] = [NpgsqlDbType.Interval],
             [typeof(byte[])] = [NpgsqlDbType.Bytea],

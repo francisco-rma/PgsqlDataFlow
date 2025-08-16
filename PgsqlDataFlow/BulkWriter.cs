@@ -1,11 +1,8 @@
 ﻿using Npgsql;
 using Npgsql.Schema;
 using NpgsqlTypes;
-using PgsqlDataFlow.Extensions;
-using System.Collections.ObjectModel;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
-using System.Linq.Expressions;
 using System.Reflection;
 using System.Text;
 
@@ -22,10 +19,8 @@ namespace PgsqlDataFlow
         public StringBuilder BuilderCreate { get; set; }
         public int PKIdx { get; set; }
         public NpgsqlDbType PKType { get; set; }
-        public NpgsqlDbType[] Types { get; set; }
-        public ReadOnlyCollection<NpgsqlDbColumn> DbColumns { get; set; }
+        public Tuple<string, NpgsqlDbType, NpgsqlDbColumn>[] TypeModelBindings { get; set; }
         public string DbPKName { get; set; }
-        public string[] ModelColumns { get; set; }
         public string ModelPKName { get; set; }
         public BulkWriter(string connectionString)
         {
@@ -43,18 +38,16 @@ namespace PgsqlDataFlow
             {
                 using var rdr = cmd.ExecuteReader(System.Data.CommandBehavior.KeyInfo);
                 var schema = rdr.GetSchemaTable() ?? throw new Exception($"Could not find table schema for table {DestinationTableName}");
-                var cols = rdr.GetColumnSchema();
+                var DbColumns = rdr.GetColumnSchema();
 
 
                 if (string.IsNullOrEmpty(ModelPKName) || string.IsNullOrEmpty(DbPKName))
                     throw new Exception("No primary key found");
 
-                DbColumns = cols;
-                //TODO encapsulate
-                for (int i = 0; i < cols.Count; i++)
+                for (int i = 0; i < DbColumns.Count; i++)
                 {
-                    string name = cols[i].ColumnName;
-                    NpgsqlDbType type = cols[i].NpgsqlDbType ?? NpgsqlDbType.Unknown;
+                    string name = DbColumns[i].ColumnName;
+                    NpgsqlDbType type = DbColumns[i].NpgsqlDbType ?? NpgsqlDbType.Unknown;
 
                     dbSchema.Add(name, type);
                     if (name == DbPKName)
@@ -64,33 +57,26 @@ namespace PgsqlDataFlow
                     }
                 }
 
+                Dictionary<string, string> nameMap = GenerateNameMap();
 
-                Dictionary<string, string> nameMap = [];
-                //TODO encapsulate
-                foreach (PropertyInfo prop in typeof(T).GetProperties())
-                {
-                    var col = prop.GetCustomAttribute<ColumnAttribute>();
-                    if (col is not null && !string.IsNullOrEmpty(col.Name))
-                    {
-                        nameMap[col.Name] = prop.Name;
-                    }
-                }
-
-                if (nameMap.Count < 1) throw new Exception("Table must have at least 1 column");
                 if (nameMap.Count != dbSchema.Count) throw new Exception("Model and database schema do not match");
 
-                Types = new NpgsqlDbType[dbSchema.Count];
-                ModelColumns = new string[dbSchema.Count];
+                TypeModelBindings = new Tuple<string, NpgsqlDbType, NpgsqlDbColumn>[dbSchema.Count];
+
                 var tempProperties = new PropertyInfo[dbSchema.Count];
 
                 int idx = 0;
-                //TODO figure out if there's a way to annotate Postgresql's expected data type in the model as well
+
                 foreach ((string colName, NpgsqlDbType colType) in dbSchema)
                 {
-                    ModelColumns[idx] = nameMap[colName];
-                    Types[idx] = colType;
+                    TypeModelBindings[idx] = new Tuple<string, NpgsqlDbType, NpgsqlDbColumn>(
+                        nameMap[colName],
+                        colType,
+                        DbColumns.First(col => col.ColumnName == colName));
 
-                    PropertyInfo property = typeof(T).GetProperty(ModelColumns[idx]) ?? throw new Exception($"Property '{ModelColumns[idx]}' not found");
+                    PropertyInfo property = typeof(T).GetProperty(TypeModelBindings[idx].Item1)
+                        ?? throw new Exception($"Property '{TypeModelBindings[idx].Item1}' not found");
+
                     tempProperties[idx] = property;
 
                     Type propertyType = property.PropertyType;
@@ -100,7 +86,7 @@ namespace PgsqlDataFlow
 
                     if (!TypeMapper.GetPgsqlTypes(propertyType).Contains(colType))
                         throw new Exception($"Property '{property.Name}' does not match it's column data type counterpart.\n" +
-                                            $"Found type {property.PropertyType}, expected {TypeMapper.GetApplicationType(Types[idx]).Name}");
+                                            $"Found type {property.PropertyType}, expected {TypeMapper.GetApplicationType(TypeModelBindings[idx].Item2).Name}");
 
                     if (!(DbColumns[idx].IsAutoIncrement ?? DbColumns[idx].ColumnName == DbPKName))
                     {
@@ -135,10 +121,14 @@ namespace PgsqlDataFlow
         /// <returns>The index of the specified property name in the model columns.</returns>
         public int GetColumnIndex(string propertyName)
         {
-            int idx = Array.IndexOf(ModelColumns, propertyName);
-            if (idx == -1)
-                throw new Exception("Column not found");
-            return idx;
+            int idx = 0;
+            foreach ((string name, NpgsqlDbType type, NpgsqlDbColumn _) in TypeModelBindings)
+            {
+                if (name == propertyName)
+                    return idx;
+                idx += 1;
+            }
+            throw new Exception("Column not found");
         }
 
         public string GetModelPrimaryKey()
@@ -207,57 +197,19 @@ namespace PgsqlDataFlow
 
                 writer.StartRow();
 
-                for (int j = 0; j < DbColumns.Count; j++)
+                for (int j = 0; j < TypeModelBindings.Length; j++)
                 {
-                    //TODO make sure that whe a column is autoincrement, the value being sent is either null or the default value of the type
-                    //and encapsulate that logic into another function
-                    if (DbColumns[j].IsAutoIncrement.HasValue && DbColumns[j].IsAutoIncrement.Value) { continue; }
+                    Tuple<string, NpgsqlDbType, NpgsqlDbColumn> typeBinding = TypeModelBindings[j];
+                    object? value = PropertyAccessors<T>.Getters[typeBinding.Item1](item);
 
-                    object? value = PropertyAccessors<T>.Getters[ModelColumns[j]](item);
+                    if (CheckAutoIncrement(typeBinding, value))
+                        continue;
 
-                    if (value == null) { writer.WriteNull(); }
+                    if (value is null)
+                        writer.WriteNull();
 
                     else
-                    {
-                        //TODO encapsulate into another function
-                        switch (Types[j])
-                        {
-                            case NpgsqlDbType.Bigint:
-                                writer.Write((long)value, Types[j]);
-                                break;
-
-                            case NpgsqlDbType.Boolean:
-                                writer.Write((bool)value, Types[j]);
-                                break;
-
-                            case NpgsqlDbType.Integer:
-                                writer.Write((int)value, Types[j]);
-                                break;
-
-                            case NpgsqlDbType.Smallint:
-                                writer.Write((short)value, Types[j]);
-                                break;
-
-                            case NpgsqlDbType.Numeric:
-                                writer.Write((decimal)value, Types[j]);
-                                break;
-
-                            //TODO assert the types are correct instead of converting, avoiding silent errors
-                            //in case the user sends malformed data by mistake
-                            case NpgsqlDbType.Timestamp:
-                            case NpgsqlDbType.Date:
-                                writer.Write(((DateTime)value).SetKind(DateTimeKind.Unspecified), Types[j]);
-                                break;
-
-                            case NpgsqlDbType.TimestampTz:
-                                writer.Write(((DateTime)value).SetKind(DateTimeKind.Utc), Types[j]);
-                                break;
-
-                            case NpgsqlDbType.Varchar:
-                                writer.Write((string)value, Types[j]);
-                                break;
-                        }
-                    }
+                        writer.Write(TypeSwitch(typeBinding.Item2, value));
                 }
             }
         }
@@ -280,15 +232,15 @@ namespace PgsqlDataFlow
 
             string tempName = "update_temp_table";
 
-            string colName = DbColumns[colIndex].ColumnName;
-            string colTypeName = Types[colIndex].ToString().ToLower();
+            string colName = TypeModelBindings[colIndex].Item3.ColumnName;
+            string colTypeName = TypeModelBindings[colIndex].Item1.ToString().ToLower();
 
             using (var createTempTable = conn.CreateCommand())
             {
                 createTempTable.CommandText = "CREATE TEMP TABLE " + tempName + " ("
                     + (DbPKName + "_temp " + PKType.ToString().ToLower())
                     + ", "
-                    + (colName) + "_temp " + Types[colIndex].ToString().ToLower() + ")";
+                    + (colName) + "_temp " + TypeModelBindings[colIndex].Item1.ToString().ToLower() + ")";
                 createTempTable.ExecuteNonQuery();
             }
             ;
@@ -303,96 +255,33 @@ namespace PgsqlDataFlow
                 {
                     writer.StartRow();
 
-                    object? colValue = PropertyAccessors<T>.Getters[ModelColumns[colIndex]](item);
-                    object? pkValue = PropertyAccessors<T>.Getters[ModelColumns[PKIdx]](item);
+                    object? colValue = PropertyAccessors<T>.Getters[TypeModelBindings[colIndex].Item1](item);
+                    object? pkValue = PropertyAccessors<T>.Getters[TypeModelBindings[PKIdx].Item1](item);
 
-                    if (pkValue == null) { writer.WriteNull(); }
+                    if (pkValue is null)
+                    {
+                        writer.WriteNull();
+                    }
                     else
                     {
-                        switch (Types[PKIdx])
-                        {
-                            case NpgsqlDbType.Bigint:
-                                writer.Write((long)pkValue, Types[PKIdx]);
-                                break;
-
-                            case NpgsqlDbType.Boolean:
-                                writer.Write((bool)pkValue, Types[PKIdx]);
-                                break;
-
-                            case NpgsqlDbType.Integer:
-                                writer.Write((int)pkValue, Types[PKIdx]);
-                                break;
-
-                            case NpgsqlDbType.Smallint:
-                                writer.Write((short)pkValue, Types[PKIdx]);
-                                break;
-
-                            case NpgsqlDbType.Numeric:
-                                writer.Write((decimal)pkValue, Types[PKIdx]);
-                                break;
-
-                            case NpgsqlDbType.Timestamp:
-                            case NpgsqlDbType.Date:
-                                writer.Write(((DateTime)pkValue).SetKind(DateTimeKind.Unspecified), Types[PKIdx]);
-                                break;
-
-                            case NpgsqlDbType.TimestampTz:
-                                writer.Write(((DateTime)pkValue).SetKind(DateTimeKind.Utc), Types[PKIdx]);
-                                break;
-
-                            case NpgsqlDbType.Varchar:
-                                writer.Write((string)pkValue, Types[PKIdx]);
-                                break;
-                        }
+                        writer.Write(BulkWriter<T>.TypeSwitch(TypeModelBindings[colIndex].Item2, pkValue));
                     }
 
-                    if (colValue == null) { writer.WriteNull(); }
+                    if (colValue is null)
+                    {
+                        writer.WriteNull();
+                    }
                     else
                     {
-                        switch (Types[colIndex])
-                        {
-                            case NpgsqlDbType.Bigint:
-                                writer.Write((long)colValue, Types[colIndex]);
-                                break;
-
-                            case NpgsqlDbType.Boolean:
-                                writer.Write((bool)colValue, Types[colIndex]);
-                                break;
-
-                            case NpgsqlDbType.Integer:
-                                writer.Write((int)colValue, Types[colIndex]);
-                                break;
-
-                            case NpgsqlDbType.Smallint:
-                                writer.Write((short)colValue, Types[colIndex]);
-                                break;
-
-                            case NpgsqlDbType.Numeric:
-                                writer.Write((decimal)colValue, Types[colIndex]);
-                                break;
-
-                            case NpgsqlDbType.Timestamp:
-                            case NpgsqlDbType.Date:
-                                writer.Write(((DateTime)colValue).SetKind(DateTimeKind.Unspecified), Types[colIndex]);
-                                break;
-
-                            case NpgsqlDbType.TimestampTz:
-                                writer.Write(((DateTime)colValue).SetKind(DateTimeKind.Utc), Types[colIndex]);
-                                break;
-
-                            case NpgsqlDbType.Varchar:
-                                writer.Write((string)colValue, Types[colIndex]);
-                                break;
-                        }
+                        writer.Write(BulkWriter<T>.TypeSwitch(TypeModelBindings[colIndex].Item2, colValue));
                     }
                 }
-
                 writer.Complete();
             }
 
             using var update = conn.CreateCommand();
             update.CommandText = "UPDATE " + DestinationTableName
-                + " SET " + DbColumns[colIndex].ColumnName + " = " + tempName + "." + DbColumns[colIndex].ColumnName + "_temp"
+                + " SET " + TypeModelBindings[colIndex].Item3.ColumnName + " = " + tempName + "." + TypeModelBindings[colIndex].Item3.ColumnName + "_temp"
                 + " FROM " + tempName + " WHERE " + DestinationTableName + "." + DbPKName + " = " + tempName + "." + DbPKName + "_temp";
 
             Console.WriteLine(update.CommandText);
@@ -406,6 +295,72 @@ namespace PgsqlDataFlow
             ConstructTable(writer, source);
             writer.Dispose();
             return;
+        }
+        private static Dictionary<string, string> GenerateNameMap()
+        {
+            Dictionary<string, string> nameMap = [];
+            foreach (PropertyInfo prop in typeof(T).GetProperties())
+            {
+                var col = prop.GetCustomAttribute<ColumnAttribute>();
+                if (col is not null && !string.IsNullOrEmpty(col.Name))
+                {
+                    nameMap[col.Name] = prop.Name;
+                }
+            }
+
+            if (nameMap.Count < 1) throw new Exception("Table must have at least 1 column");
+            return nameMap;
+        }
+        private static dynamic TypeSwitch(NpgsqlDbType type, object value)
+        {
+            switch (type)
+            {
+                case NpgsqlDbType.Bigint:
+                    return (long)value;
+
+                case NpgsqlDbType.Boolean:
+                    return (bool)value;
+
+                case NpgsqlDbType.Integer:
+                    return (int)value;
+
+                case NpgsqlDbType.Smallint:
+                    return (short)value;
+
+                case NpgsqlDbType.Numeric:
+                    return (decimal)value;
+
+                case NpgsqlDbType.Timestamp:
+                case NpgsqlDbType.Date:
+                    return DateTime.SpecifyKind((DateTime)value, DateTimeKind.Unspecified);
+
+                case NpgsqlDbType.TimestampTz:
+                    return DateTime.SpecifyKind((DateTime)value, DateTimeKind.Utc);
+
+                case NpgsqlDbType.Varchar:
+                    return (string)value;
+
+                default:
+                    return value;
+            }
+        }
+        public bool IsDefault<D>(D value)
+        {
+            bool result = EqualityComparer<D>.Default.Equals(value, default(D));
+            return result;
+        }
+        public bool CheckAutoIncrement(Tuple<string, NpgsqlDbType, NpgsqlDbColumn> typeBinding, object? value)
+        {
+            if (typeBinding.Item3.IsAutoIncrement.HasValue && typeBinding.Item3.IsAutoIncrement.Value)
+            {
+                if (value is not null && !IsDefault(TypeSwitch(typeBinding.Item2, value)))
+                    throw new Exception($"Auto increment column\n" +
+                        $"({typeBinding.Item3.DataTypeName}){typeBinding.Item3.ColumnName}:{typeBinding.Item1}" +
+                        $"\nshould be null");
+                return true;
+            }
+
+            return false;
         }
     }
 }
