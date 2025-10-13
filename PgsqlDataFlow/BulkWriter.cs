@@ -202,7 +202,7 @@ namespace PgsqlDataFlow
                     Tuple<string, NpgsqlDbType, NpgsqlDbColumn> typeBinding = TypeModelBindings[j];
                     object? value = PropertyAccessors<T>.Getters[typeBinding.Item1](item);
 
-                    if (CheckAutoIncrement(typeBinding, value))
+                    if (CheckAutoIncrement(typeBinding.Item1, typeBinding.Item2, typeBinding.Item3, value))
                         continue;
 
                     if (value is null)
@@ -349,13 +349,13 @@ namespace PgsqlDataFlow
             bool result = EqualityComparer<D>.Default.Equals(value, default(D));
             return result;
         }
-        public bool CheckAutoIncrement(Tuple<string, NpgsqlDbType, NpgsqlDbColumn> typeBinding, object? value)
+        public bool CheckAutoIncrement(string propertyName, NpgsqlDbType dbType, NpgsqlDbColumn dbColumn, object? value)
         {
-            if (typeBinding.Item3.IsAutoIncrement.HasValue && typeBinding.Item3.IsAutoIncrement.Value)
+            if (dbColumn.IsAutoIncrement.HasValue && dbColumn.IsAutoIncrement.Value)
             {
-                if (value is not null && !IsDefault(TypeSwitch(typeBinding.Item2, value)))
+                if (value is not null && !IsDefault(TypeSwitch(dbType, value)))
                     throw new Exception($"Auto increment column\n" +
-                        $"({typeBinding.Item3.DataTypeName}){typeBinding.Item3.ColumnName}:{typeBinding.Item1}" +
+                        $"({dbColumn.DataTypeName}){dbColumn.ColumnName}:{propertyName}" +
                         $"\nshould be null");
                 return true;
             }
