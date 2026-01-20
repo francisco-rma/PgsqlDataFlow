@@ -18,7 +18,8 @@ namespace Benchmarker
         {
             string targetDb = "testdb";
 
-            using (NpgsqlConnection conn = new($"Host={Environment.GetEnvironmentVariable("POSTGRES_HOST") ?? "localhost"};" +
+            using (NpgsqlConnection conn = new(
+            $"Host={Environment.GetEnvironmentVariable("POSTGRES_HOST") ?? "localhost"};" +
             $"Port={Environment.GetEnvironmentVariable("POSTGRES_PORT") ?? "5432"};" +
             $"Pooling=true;" +
             $"Database=postgres;" +

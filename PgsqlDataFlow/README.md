@@ -1,14 +1,15 @@
 # PgsqlDataFlow
 
-PgsqlDataFlow is a lightweight .NET 8 library designed to facilitate high-performance bulk data operations with PostgreSQL. It leverages the `Npgsql` library's binary `COPY` protocol for efficient bulk inserts and updates.
+PgsqlDataFlow is a lightweight library designed to facilitate bulk data operations with PostgreSQL.
+It leverages the `PostgreSQL`'s binary `COPY` protocol for efficient bulk inserts and updates, 
+using `Npgsql` under the hood to connect to the server.
 
 ## Features
 
--   **High-Speed Bulk Inserts**: Uses PostgreSQL's `COPY FROM STDIN (FORMAT BINARY)` for maximum insert performance.
--   **Efficient Bulk Updates**: Performs bulk updates for specific columns using a temporary table and `COPY` command.
--   **Attribute-Based Mapping**: Maps C# model properties to database columns using `[Table]`, `[Column]`, and `[Key]` attributes from `System.ComponentModel.DataAnnotations.Schema`.
--   **Automatic Schema Validation**: Verifies that model property types match the database column types on initialization.
--   **Auto-increment Primary Key Support**: Automatically handles identity/serial columns during inserts.
+-   **Bulk Inserts**: Uses PostgreSQL's `COPY FROM STDIN (FORMAT BINARY)` for maximum insert performance.
+-   **Bulk Updates**: Performs bulk updates (still for single column) using a temporary table and `COPY` command.
+-   **Attribute-Based Mapping**: Validates C# model class T against the database columns using `[Table]`, `[Column]`, and `[Key]` attributes from `System.ComponentModel.DataAnnotations.Schema`.
+-   **Auto-increment Columns Support**: Will skip columns marked with a auto incrementing values (e.g., `SERIAL`, `IDENTITY`) during inserts.
 
 ## Requirements
 
